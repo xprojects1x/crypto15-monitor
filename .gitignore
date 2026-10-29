@@ -1,0 +1,10 @@
+# Local data, logs and paper trades stay on your machine (the cloud copy lives on the history-data branch)
+data/
+_site/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local secrets and backups never go to GitHub
+.env
+backups/

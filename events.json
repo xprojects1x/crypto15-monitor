@@ -1,0 +1,20 @@
+{
+  "about": "Market-moving events in US Eastern time. 'high' events make the risk manager sit out (Avoid events setting); every event within 15 minutes of a window is a feature for the Events & volatility agent. Add CPI, jobs-report and other release dates as they are published. The app re-reads this file every minute.",
+  "events": [
+    {"name": "FOMC rate decision", "date": "2026-12-09", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-01-27", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-03-17", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-04-28", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-06-09", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-07-28", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-09-15", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-10-27", "time_et": "14:00", "impact": "high"},
+    {"name": "FOMC rate decision", "date": "2027-12-08", "time_et": "14:00", "impact": "high"}
+  ],
+  "recurring": [
+    {"name": "US economic data release slot", "weekdays": [0, 1, 2, 3, 4], "time_et": "08:30", "impact": "medium"},
+    {"name": "US stock market open", "weekdays": [0, 1, 2, 3, 4], "time_et": "09:30", "impact": "medium"},
+    {"name": "US data release slot (10:00)", "weekdays": [0, 1, 2, 3, 4], "time_et": "10:00", "impact": "medium"},
+    {"name": "US stock market close", "weekdays": [0, 1, 2, 3, 4], "time_et": "16:00", "impact": "low"}
+  ]
+}

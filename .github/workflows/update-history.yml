@@ -1,0 +1,136 @@
+# Refreshes the Kalshi 15-minute crypto history reports (BTC, ETH, SOL) every hour and publishes them to GitHub Pages.
+#
+# One-time setup (see README "Run it online with GitHub"):
+#   Settings -> Pages -> Build and deployment -> Source: "GitHub Actions"
+#   Actions tab -> "Update history report" -> Run workflow   (first run: prices days = 30)
+#
+# Data is kept between runs on a branch called "history-data" (overwritten each run, so the repo stays small).
+
+name: Update history report
+
+on:
+  schedule:
+    - cron: "7 * * * *"          # every hour at :07 UTC (GitHub may start it a few minutes late)
+  workflow_dispatch:
+    inputs:
+      prices_days:
+        description: "Download Kalshi's prices for windows from the last N days (or 'all' - takes about an hour the first time)"
+        default: "2"
+        required: false
+      coinbase_sample:
+        description: "Windows to cross-check against Coinbase (0 to skip)"
+        default: "100"
+        required: false
+      coins:
+        description: "Coins to update, space-separated"
+        default: "BTC ETH SOL"
+        required: false
+
+permissions:
+  contents: write     # save data to the history-data branch
+  pages: write        # publish the report
+  id-token: write
+
+concurrency:
+  group: update-history
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Restore saved history
+        run: |
+          mkdir -p data
+          if git fetch --quiet --depth=1 origin history-data 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C data
+            for f in data/history/windows.csv data/eth/history/windows.csv data/sol/history/windows.csv; do
+              [ -f "$f" ] && echo "Restored $(wc -l < "$f") lines into $f"
+            done
+          else
+            echo "No saved history yet - this is the first run"
+          fi
+
+      - name: Download settled windows from Kalshi
+        env:
+          PRICES_DAYS: ${{ github.event.inputs.prices_days || '2' }}
+          COINS: ${{ github.event.inputs.coins || 'BTC ETH SOL' }}
+        run: |
+          for coin in $COINS; do
+            echo "::group::$coin"
+            if [ "$PRICES_DAYS" = "all" ]; then
+              python history.py --asset "$coin" --candles || echo "::warning::$coin download failed"
+            elif [ "$PRICES_DAYS" = "0" ]; then
+              python history.py --asset "$coin" || echo "::warning::$coin download failed"
+            else
+              python history.py --asset "$coin" --candles-days "$PRICES_DAYS" || echo "::warning::$coin download failed"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Validate
+        env:
+          COINBASE_SAMPLE: ${{ github.event.inputs.coinbase_sample || '100' }}
+          COINS: ${{ github.event.inputs.coins || 'BTC ETH SOL' }}
+        run: |
+          for coin in $COINS; do
+            python validate.py --asset "$coin" --coinbase "$COINBASE_SAMPLE" || echo "::warning::$coin validation failed"
+          done
+
+      - name: Save history for the next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf _save && mkdir -p _save
+          for d in history eth/history sol/history; do
+            [ -f "data/$d/windows.csv" ] && mkdir -p "_save/$d" && cp -r "data/$d/." "_save/$d/"
+          done
+          [ -n "$(ls -A _save)" ] || { echo "Nothing to save"; exit 0; }
+          cd _save
+          git init --quiet --initial-branch=history-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit --quiet -m "History data $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" history-data
+          echo "Saved to the history-data branch"
+
+      - name: Build the web pages
+        run: |
+          mkdir -p _site
+          for pair in "history:." "eth/history:eth" "sol/history:sol"; do
+            src="data/${pair%%:*}"; dst="_site/${pair##*:}"
+            [ -f "$src/report.html" ] || continue
+            mkdir -p "$dst/data"
+            cp "$src/report.html" "$dst/index.html"
+            for f in windows.csv daily.csv hourly.csv weekday.csv validation.json; do
+              [ -f "$src/$f" ] && cp "$src/$f" "$dst/data/"
+            done
+          done
+          [ -f _site/index.html ] || { echo "No reports were built"; exit 1; }
+          touch _site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload page
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - name: Publish page
+        id: deploy
+        uses: actions/deploy-pages@v5

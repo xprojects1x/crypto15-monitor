@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crypto 15m History</title>
+<style>
+:root{
+  color-scheme:dark;
+  --page:#0d0d0d; --surface:#1a1a19; --surface-2:#222220; --line:#2c2c2a; --axis:#383835;
+  --ink:#f0efec; --ink-2:#c3c2b7; --muted:#898781; --ring:rgba(255,255,255,.10);
+  --s1:#3987e5; --s2:#d95926; --up:#0ca30c; --down:#d03b3b; --warn:#fab219; --good:#0ca30c; --crit:#d03b3b;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.45 var(--sans)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;gap:6px 14px;align-items:baseline;flex-wrap:wrap}
+header h1{min-width:0}
+header h1{margin:0;font-size:17px}
+header .sub{color:var(--ink-2);font-size:13px}
+header a{color:var(--s1);font-size:13px;margin-left:auto}
+main{max-width:1280px;margin:0 auto;padding:16px 20px 48px;display:grid;gap:14px}
+.tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+@media (max-width:1000px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:560px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tile{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:12px 14px;min-width:0}
+.tile .lab{font-size:12px;color:var(--muted)}
+.tile .val{font-size:22px;font-weight:650;margin-top:2px}
+.tile .note{font-size:12px;color:var(--ink-2);margin-top:2px}
+.card{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:14px 16px;min-width:0;overflow-x:auto}
+.card h2{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:0 0 4px}
+.card .desc{font-size:13px;color:var(--ink-2);margin:0 0 10px}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+@media (max-width:900px){.two{grid-template-columns:minmax(0,1fr)}}
+.chart{position:relative;width:100%}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.tip{position:absolute;pointer-events:none;background:#0d0d0d;border:1px solid var(--ring);border-radius:7px;
+  padding:7px 9px;font-size:12px;white-space:nowrap;display:none;z-index:3}
+.tip .k{color:var(--ink-2)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-2);margin:0 0 8px}
+.legend i{display:inline-block;width:12px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.legend i.line{height:2px;vertical-align:3px}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;font-weight:600;color:var(--muted);text-align:right;padding:5px 8px;border-bottom:1px solid var(--line);
+  text-transform:uppercase;letter-spacing:.04em;position:sticky;top:0;background:var(--surface)}
+td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line);font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px}
+th:first-child,td:first-child{text-align:left}
+tr:last-child td{border-bottom:none}
+.scroll{max-height:420px;overflow:auto}
+.sig{color:var(--warn)}
+.muted{color:var(--muted)}
+.tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.tabs button{font:inherit;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid var(--ring);background:var(--surface-2);color:var(--ink-2);cursor:pointer}
+.tabs button.on{border-color:var(--s1);color:var(--ink)}
+.empty{color:var(--ink-2);font-size:13px;padding:8px 0}
+code{font-family:var(--mono);font-size:12px;background:var(--surface-2);padding:1px 5px;border-radius:4px}
+footer{color:var(--muted);font-size:12px;line-height:1.55}
+body.cb{--up:#3987e5; --down:#d95926}
+.toggle{font:inherit;font-size:12px;padding:4px 10px;border-radius:99px;border:1px solid var(--ring);background:var(--surface-2);color:var(--ink-2);cursor:pointer}
+.gridwrap{position:relative;max-height:560px;overflow:auto;border-radius:6px}
+.gridwrap canvas{display:block}
+.lab-form{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 14px;margin-bottom:12px}
+@media (max-width:900px){.lab-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.lab-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-2)}
+.lab-form input,.lab-form select{font:inherit;font-size:13px;font-family:var(--mono);background:var(--page);color:var(--ink);border:1px solid var(--ring);border-radius:6px;padding:5px 7px;width:100%}
+.lab-form .hint{font-size:11px;color:var(--muted)}
+.res{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:10px 0 12px}
+@media (max-width:900px){.res{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.res .tile{background:var(--surface-2)}
+.pos{color:var(--good)} .neg{color:#e66767}
+.btn{font:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:7px;border:1px solid var(--ring);background:var(--surface-2);color:var(--ink);cursor:pointer}
+.btn:hover{border-color:var(--ink-2)}
+.status{font-family:var(--sans);font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px;white-space:nowrap}
+.status.PASS{background:rgba(12,163,12,.18);color:var(--good)}
+.status.WARN{background:rgba(250,178,25,.16);color:var(--warn)}
+.status.FAIL{background:rgba(208,59,59,.22);color:#e66767}
+.status.INFO{background:var(--surface-2);color:var(--ink-2)}
+td.l{text-align:left;font-family:var(--sans)}
+.callout{border-left:3px solid var(--warn);padding:8px 12px;background:var(--surface-2);border-radius:0 8px 8px 0;font-size:13px;color:var(--ink-2);margin:0 0 12px}
+a{color:var(--s1)}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="coin">BTC</span> 15-minute history · Kalshi <span id="seriesName">KXBTC15M</span></h1>
+  <nav class="tabs" id="coinNav" aria-label="Coin" style="margin:0"></nav>
+  <span class="sub" id="period">—</span>
+  <button class="toggle" id="cbToggle" type="button" aria-pressed="false">Colorblind colors: off</button>
+  <a href="/" id="back">← Live dashboard</a>
+</header>
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card" id="valCard">
+    <h2>Data checks</h2>
+    <div id="valWrap"></div>
+  </section>
+
+  <section class="card">
+    <h2>Up vs Down, every day</h2>
+    <p class="desc">How many of each day's windows settled Up and how many settled Down (up to 96 a day).</p>
+    <div class="legend"><span><i style="background:var(--up)"></i>▲ Up</span><span><i style="background:var(--down)"></i>▼ Down</span></div>
+    <div class="chart" id="cUpDown"></div>
+  </section>
+
+  <section class="card">
+    <h2>Every window, day by day</h2>
+    <p class="desc" id="gridDesc">Each row is a day (newest on top); each cell is one 15-minute window. Hover a cell for details.</p>
+    <div class="legend"><span><i style="background:var(--up)"></i>▲ Up</span><span><i style="background:var(--down)"></i>▼ Down</span><span><i style="background:var(--surface-2);border:1px solid var(--ring)"></i>No window</span></div>
+    <div class="gridwrap" id="gridWrap"><canvas id="grid"></canvas><div class="tip" id="gridTip"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Up rate by day</h2>
+    <p class="desc">Share of that day's windows that settled Up. Most days land near 50%; single days swing a lot by chance.</p>
+    <div class="legend"><span><i class="line" style="background:var(--s1)"></i>Daily up rate</span><span><i class="line" style="background:var(--muted)"></i>50%</span></div>
+    <div class="chart" id="cDaily"></div>
+  </section>
+
+  <section class="card">
+    <h2>Typical move per window, by day</h2>
+    <p class="desc">Median distance between settlement and the price to beat. Bigger moves mean fewer coin-flip finishes.</p>
+    <div class="legend"><span><i class="line" style="background:var(--s2)"></i>Median |settle − price to beat|</span></div>
+    <div class="chart" id="cDailyMove"></div>
+  </section>
+
+  <div class="two">
+    <section class="card">
+      <h2>Up rate by hour</h2>
+      <p class="desc" id="hourDesc">Window start hour. Whiskers are 95% ranges: bars whose range crosses 50% are faded because they're indistinguishable from chance.</p>
+      <div class="legend"><span><i style="background:var(--s1)"></i>Clear of 50%</span><span><i style="background:var(--s1);opacity:.35"></i>Within noise</span></div>
+      <div class="chart" id="cHour"></div>
+    </section>
+    <section class="card">
+      <h2>Typical move by hour</h2>
+      <p class="desc">Median |move| by window start hour: when <span class="coin">BTC</span> tends to be quiet (more close calls) or busy.</p>
+      <div class="legend"><span><i style="background:var(--s2)"></i>Median |move|</span></div>
+      <div class="chart" id="cHourMove"></div>
+    </section>
+  </div>
+
+  <div class="two">
+    <section class="card">
+      <h2>How far windows finish from the line</h2>
+      <p class="desc">Settlement value minus price to beat, in <span class="stepTxt">$25</span> buckets.</p>
+      <div class="legend"><span><i style="background:var(--up)"></i>Settled Up</span><span><i style="background:var(--down)"></i>Settled Down</span></div>
+      <div class="chart" id="cHist"></div>
+    </section>
+    <section class="card">
+      <h2>Streaks</h2>
+      <p class="desc">Runs of the same result in back-to-back windows, and whether the last result predicts the next.</p>
+      <div class="legend"><span><i style="background:var(--s1)"></i>Number of runs</span></div>
+      <div class="chart" id="cRuns"></div>
+      <table style="margin-top:10px"><thead><tr><th>After</th><th>Windows</th><th>Next was Up</th><th>95% range</th></tr></thead><tbody id="condBody"></tbody></table>
+    </section>
+  </div>
+
+  <div class="two">
+    <section class="card">
+      <h2>By weekday</h2>
+      <table><thead><tr><th>Day</th><th>Windows</th><th>Up rate</th><th>±95%</th><th>Median move</th><th>Within <span class="stepTxt">$25</span></th></tr></thead><tbody id="wdBody"></tbody></table>
+    </section>
+    <section class="card">
+      <h2>By quarter-hour slot</h2>
+      <table><thead><tr><th>Start</th><th>Windows</th><th>Up rate</th><th>±95%</th><th>Median move</th><th>Within <span class="stepTxt">$25</span></th></tr></thead><tbody id="slotBody"></tbody></table>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Was Kalshi's price right?</h2>
+    <p class="desc">Windows grouped by Kalshi's Yes mid price shortly before close, against how often they actually settled Up. Edge columns are the average result of buying at the ask after taker fees; positive means that price level was historically cheap.</p>
+    <div id="calibWrap"></div>
+  </section>
+
+  <section class="card" id="labCard">
+    <h2>Sequence &amp; progression lab</h2>
+    <p class="desc">Replays a betting rule over the real sequence of results, one bet per window, with Kalshi's taker fee on every bet. Change any setting and it reruns.</p>
+    <div class="callout" id="labWarn">A progression (e.g. doubling after each loss) only changes <b>how much</b> you bet, not the odds of each window. If each bet loses a little on average, a progression usually wins small and often, then loses big when a long streak arrives. Use the luck test below to see whether a rule did better than chance.</div>
+    <form class="lab-form" id="lab" onsubmit="return false">
+      <label>Which side to bet
+        <select id="L_rule">
+          <option value="up">Always Up</option><option value="down">Always Down</option>
+          <option value="follow">Same as last window</option><option value="fade">Opposite of last window</option>
+          <option value="switch">Keep side until a loss, then switch</option>
+          <option value="fadeStreak">After N in a row: bet the opposite</option><option value="followStreak">After N in a row: bet the same</option>
+        </select><span class="hint">“Last window” = the result just before</span></label>
+      <label>Streak length N<input id="L_n" type="number" min="1" max="12" value="3"><span class="hint">Only for the two “N in a row” rules</span></label>
+      <label>Staking
+        <select id="L_stake">
+          <option value="martingale">Martingale: size up to recover all losses</option>
+          <option value="capped">Capped martingale: give up after K losses</option>
+          <option value="dalembert">D'Alembert: +1 unit after loss, −1 after win</option>
+          <option value="flat">Flat: same stake every time</option>
+        </select></label>
+      <label>Max losses before giving up (K)<input id="L_k" type="number" min="1" max="20" value="6"><span class="hint">Only for capped martingale</span></label>
+      <label>Base amount ($)<input id="L_base" type="number" min="1" step="1" value="10"><span class="hint">Martingale: profit target per cycle. Others: stake per bet.</span></label>
+      <label>Starting bankroll ($)<input id="L_bank" type="number" min="10" step="100" value="5000"></label>
+      <label>Max bet per window ($)<input id="L_max" type="number" min="1" step="100" value="5000"><span class="hint">Liquidity / risk limit</span></label>
+      <label>Entry price
+        <select id="L_pricemode"><option value="assumed">Assumed price</option><option value="kalshi">Kalshi ask 1 min after open (where downloaded)</option></select></label>
+      <label>Assumed price (¢)<input id="L_price" type="number" min="1" max="99" step="0.5" value="51"><span class="hint">Fair is 50¢; you pay the ask, ~1–2¢ above</span></label>
+      <label>When bankroll runs out
+        <select id="L_bust"><option value="stop">Stop (account blown)</option><option value="rebuy">Re-deposit and keep going</option></select></label>
+      <label>Period
+        <select id="L_range"><option value="all">All history</option><option value="first">First half</option><option value="second">Second half</option><option value="last30">Last 30 days</option><option value="last7">Last 7 days</option></select></label>
+      <label>&nbsp;<button class="btn" id="L_luck" type="button">Run luck test (200 shuffles)</button></label>
+    </form>
+    <div class="res" id="labRes"></div>
+    <div class="legend"><span><i class="line" style="background:var(--s1)"></i>Account value</span><span><i class="line" style="background:var(--muted)"></i>Money put in</span></div>
+    <div class="chart" id="cEquity"></div>
+    <div id="luckOut" style="margin-top:10px"></div>
+    <h2 style="margin-top:16px">Every rule × staking, same settings</h2>
+    <div style="overflow-x:auto"><table><thead><tr><th>Side rule</th><th>Flat</th><th>D'Alembert</th><th>Capped martingale</th><th>Martingale</th></tr></thead><tbody id="cmpBody"></tbody></table></div>
+    <p class="desc" style="margin-top:8px">Profit or loss over the period; “blown” means the bankroll couldn't cover the next bet.</p>
+  </section>
+
+  <section class="card">
+    <h2>Daily table</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Date</th><th>Windows</th><th>Up</th><th>Down</th><th>Up rate</th><th>Median move</th><th>Largest move</th><th>Within <span class="stepTxt">$25</span></th><th><span class="coin">BTC</span> open</th><th><span class="coin">BTC</span> close</th><th>Volume</th></tr></thead>
+      <tbody id="dayBody"></tbody>
+    </table></div>
+  </section>
+
+  <footer id="foot"></footer>
+</main>
+
+<script>
+const SUMMARY = /*__SUMMARY__*/null;
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const COL = {s1:css('--s1'), s2:css('--s2'), up:css('--up'), down:css('--down'), grid:css('--line'), axis:css('--axis'), muted:css('--muted'), ink2:css('--ink-2')};
+const pct = (v,d=1) => v==null ? '—' : (v*100).toFixed(d)+'%';
+// $ amounts: whole dollars for big numbers, more decimals for small ones (ETH moves, SOL prices)
+const usd = (v,d) => { if (v==null) return '—'; let lo = d, hi = d;
+  if (d==null){ const a = Math.abs(v); [lo, hi] = a >= 10 ? [0, 0] : a >= 1 ? [2, 2] : [2, 4]; }
+  return (v<0?'−':'')+'$'+Math.abs(Number(v)).toLocaleString('en-US',{minimumFractionDigits:lo,maximumFractionDigits:hi}); };
+const int = v => v==null ? '—' : Math.round(v).toLocaleString('en-US');
+const cents = v => v==null ? '—' : (v>=0?'+':'−')+Math.abs(v*100).toFixed(1)+'¢';
+const sig = (p,ci) => p!=null && ci!=null && Math.abs(p-0.5) > ci;
+
+// ---------- tiny SVG chart kit (hover tooltips, one y-axis) ----------
+function mkTip(el){ const t=document.createElement('div'); t.className='tip'; el.appendChild(t); return t; }
+function placeTip(el, tip, html, x, y){
+  tip.innerHTML = html; tip.style.display='block';
+  const w = el.clientWidth, tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(0, x + 12), w - tw) + 'px'; tip.style.top = Math.max(0, y - 40) + 'px';
+}
+function niceTicks(min, max, n=5){
+  const span = max - min || 1, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1,2,2.5,5,10].map(s=>s*mag).find(s => span/s <= n) || step0;
+  const out = []; for (let v = Math.ceil(min/step)*step; v <= max + 1e-9; v += step) out.push(+v.toFixed(10)); return out;
+}
+function frame(el, H, yMin, yMax, yFmt, xLabels, everyX){
+  const W = Math.max(320, el.clientWidth), m = {l:56, r:12, t:10, b:28};
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const y = v => m.t + ph - (v - yMin) / (yMax - yMin) * ph;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  for (const t of niceTicks(yMin, yMax)) {
+    s += `<line x1="${m.l}" x2="${W-m.r}" y1="${y(t)}" y2="${y(t)}" stroke="${COL.grid}"/>`;
+    s += `<text x="${m.l-8}" y="${y(t)+4}" text-anchor="end" fill="${COL.muted}" font-size="11">${yFmt(t)}</text>`;
+  }
+  s += `<line x1="${m.l}" x2="${W-m.r}" y1="${m.t+ph}" y2="${m.t+ph}" stroke="${COL.axis}"/>`;
+  return {W, H, m, pw, ph, y, s};
+}
+function lineChart(el, {labels, values, color, yFmt, yMin, yMax, ref, tip}){
+  const H = 220, vals = values.filter(v=>v!=null);
+  if (!vals.length){ el.innerHTML = '<div class="empty">No data.</div>'; return; }
+  let lo = yMin ?? Math.min(...vals), hi = yMax ?? Math.max(...vals); if (lo===hi){ lo-=1; hi+=1; }
+  const F = frame(el, H, lo, hi, yFmt);
+  const x = i => F.m.l + (labels.length===1 ? F.pw/2 : i/(labels.length-1)*F.pw);
+  let s = F.s;
+  if (ref!=null) s += `<line x1="${F.m.l}" x2="${F.W-F.m.r}" y1="${F.y(ref)}" y2="${F.y(ref)}" stroke="${COL.muted}" stroke-dasharray="5 4"/>`;
+  let d = '', pen = false;
+  values.forEach((v,i) => { if (v==null){ pen=false; return; } d += (pen?'L':'M') + x(i).toFixed(1) + ' ' + F.y(v).toFixed(1); pen = true; });
+  s += `<path d="${d}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+  const step = Math.max(1, Math.ceil(labels.length / Math.floor(F.pw/90)));
+  labels.forEach((lab,i) => { if (i % step === 0) s += `<text x="${x(i)}" y="${H-8}" text-anchor="middle" fill="${COL.muted}" font-size="11">${lab}</text>`; });
+  s += `<line id="hx" x1="0" x2="0" y1="${F.m.t}" y2="${F.m.t+F.ph}" stroke="${COL.ink2}" stroke-width="1" opacity="0"/>`;
+  s += `<circle id="hp" r="4" fill="${color}" stroke="${css('--surface')}" stroke-width="2" opacity="0"/>`;
+  s += `<rect x="${F.m.l}" y="${F.m.t}" width="${F.pw}" height="${F.ph}" fill="transparent" class="hit"/></svg>`;
+  el.innerHTML = s; const t = mkTip(el), svg = el.querySelector('svg'), hx = svg.querySelector('#hx'), hp = svg.querySelector('#hp');
+  svg.querySelector('.hit').addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * F.W / r.width;
+    const i = Math.max(0, Math.min(labels.length-1, Math.round((sx - F.m.l) / F.pw * (labels.length-1))));
+    if (values[i]==null) return;
+    hx.setAttribute('x1', x(i)); hx.setAttribute('x2', x(i)); hx.setAttribute('opacity', .5);
+    hp.setAttribute('cx', x(i)); hp.setAttribute('cy', F.y(values[i])); hp.setAttribute('opacity', 1);
+    placeTip(el, t, tip(i), (x(i)) * r.width / F.W, e.clientY - r.top);
+  });
+  svg.querySelector('.hit').addEventListener('mouseleave', () => { t.style.display='none'; hx.setAttribute('opacity',0); hp.setAttribute('opacity',0); });
+}
+function barChart(el, {labels, values, colors, opac, ci, yFmt, yMin, yMax, ref, tip, H=220, labelEvery}){
+  const vals = values.filter(v=>v!=null);
+  if (!vals.length){ el.innerHTML = '<div class="empty">No data.</div>'; return; }
+  let hi = yMax ?? Math.max(...vals.map((v,i)=>v + ((ci&&ci[i])||0))), lo = yMin ?? 0;
+  const F = frame(el, H, lo, hi, yFmt);
+  const n = labels.length, slot = F.pw / n, bw = Math.max(2, slot - 2);
+  let s = F.s;
+  values.forEach((v,i) => {
+    if (v==null) return;
+    const x0 = F.m.l + i*slot + (slot-bw)/2, top = F.y(Math.max(v, lo)), base = F.y(lo), h = Math.max(1, base - top), rr = Math.min(4, bw/2, h);
+    s += `<path d="M${x0} ${base} V${top+rr} Q${x0} ${top} ${x0+rr} ${top} H${x0+bw-rr} Q${x0+bw} ${top} ${x0+bw} ${top+rr} V${base} Z" fill="${colors[i]}" opacity="${opac?opac[i]:1}"/>`;
+    if (ci && ci[i]!=null){ const cx = x0 + bw/2;
+      s += `<line x1="${cx}" x2="${cx}" y1="${F.y(Math.min(hi, v+ci[i]))}" y2="${F.y(Math.max(lo, v-ci[i]))}" stroke="${COL.ink2}" stroke-width="1.5"/>`; }
+  });
+  if (ref!=null) s += `<line x1="${F.m.l}" x2="${F.W-F.m.r}" y1="${F.y(ref)}" y2="${F.y(ref)}" stroke="${COL.muted}" stroke-dasharray="5 4"/>`;
+  const every = labelEvery || Math.max(1, Math.ceil(n / Math.floor(F.pw/34)));
+  labels.forEach((lab,i) => { if (i % every === 0) s += `<text x="${F.m.l + i*slot + slot/2}" y="${H-8}" text-anchor="middle" fill="${COL.muted}" font-size="11">${lab}</text>`; });
+  s += `<rect x="${F.m.l}" y="${F.m.t}" width="${F.pw}" height="${F.ph}" fill="transparent" class="hit"/></svg>`;
+  el.innerHTML = s; const t = mkTip(el), svg = el.querySelector('svg');
+  svg.querySelector('.hit').addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * F.W / r.width;
+    const i = Math.max(0, Math.min(n-1, Math.floor((sx - F.m.l) / slot)));
+    placeTip(el, t, tip(i), (F.m.l + i*slot + slot/2) * r.width / F.W, e.clientY - r.top);
+  });
+  svg.querySelector('.hit').addEventListener('mouseleave', () => t.style.display='none');
+}
+const tipRows = (title, rows) => `<div class="k">${title}</div>` + rows.map(([k,v]) => `<div><span class="k">${k}</span> <span class="num">${v}</span></div>`).join('');
+
+// ---------- render ----------
+function render(S){
+  if (!S || S.empty){ document.querySelector('main').innerHTML = '<div class="card empty">No history downloaded yet. Run <code>python history.py</code>.</div>'; return; }
+  S.asset = S.asset || 'BTC'; S.series = S.series || 'KXBTC15M'; S.step = S.step || 25; S.decimals = S.decimals ?? 2;
+  document.querySelectorAll('.coin').forEach(el => el.textContent = S.asset);
+  document.querySelectorAll('.stepTxt').forEach(el => el.textContent = usd(S.step));
+  $('seriesName').textContent = S.series; document.title = `${S.asset} 15m History`;
+  coinNav(S.asset);
+  // "Live dashboard" only makes sense when the report is served by app.py (on your PC or in a Codespace)
+  const servedByApp = ['localhost','127.0.0.1'].includes(location.hostname) || location.hostname.endsWith('.app.github.dev');
+  if (!servedByApp) $('back').style.display = 'none';
+  const o = S.overall, tz = S.tz;
+  $('period').textContent = `${o.first_close_utc.slice(0,10)} → ${o.last_close_utc.slice(0,10)} · ${o.days} days · times in ${tz}`;
+  const tiles = [
+    ['Settled windows', int(o.windows), o.missing_windows ? `${int(o.missing_windows)} gaps in the schedule` : 'no gaps'],
+    ['Settled Up', pct(o.up_rate), `±${pct(o.ci)} (95%) · ${int(o.up)} up / ${int(o.down)} down`],
+    ['Median move', usd(o.med_abs_move), `average ${usd(o.avg_abs_move)}`],
+    [`Finished within ${usd(S.step)}`, pct(o.within_25,0), `within ${usd(2*S.step)}: ${pct(o.within_50,0)} · ≥${usd(4*S.step)}: ${pct(o.over_100,0)}`],
+    ['Longest Up streak', S.streaks.longest_up.len + ' windows', S.streaks.longest_up.ended_utc ? 'ended '+S.streaks.longest_up.ended_utc.slice(0,10) : ''],
+    ['Longest Down streak', S.streaks.longest_down.len + ' windows', S.streaks.longest_down.ended_utc ? 'ended '+S.streaks.longest_down.ended_utc.slice(0,10) : ''],
+  ];
+  $('tiles').innerHTML = tiles.map(([l,v,n]) => `<div class="tile"><div class="lab">${l}</div><div class="val num">${v}</div><div class="note">${n}</div></div>`).join('');
+
+  const D = S.daily, dl = D.map(d => d.date.slice(5));
+  lineChart($('cDaily'), {labels: dl, values: D.map(d=>d.up_rate), color: COL.s1, yFmt: v=>Math.round(v*100)+'%', yMin: 0.2, yMax: 0.8, ref: 0.5,
+    tip: i => tipRows(D[i].date, [['Up rate', pct(D[i].up_rate)], ['Up / Down', `${D[i].up} / ${D[i].down}`], ['Windows', D[i].n]])});
+  lineChart($('cDailyMove'), {labels: dl, values: D.map(d=>d.med_abs_move), color: COL.s2, yFmt: v=>usd(v), yMin: 0,
+    tip: i => tipRows(D[i].date, [['Median move', usd(D[i].med_abs_move)], ['Largest', usd(D[i].max_abs_move)], [`Within ${usd(S.step)}`, pct(D[i].within_25,0)]])});
+
+  const Hh = S.hourly, hl = Hh.map(h => String(h.hour).padStart(2,'0'));
+  const hourLabel = h => { const a = h%12===0?12:h%12; return `${a}${h<12?'am':'pm'}`; };
+  $('hourDesc').textContent = `Window start hour (${tz}). Whiskers are 95% ranges: bars whose range crosses 50% are faded because they're indistinguishable from chance.`;
+  barChart($('cHour'), {labels: hl, values: Hh.map(h=>h.up_rate), colors: Hh.map(()=>COL.s1), opac: Hh.map(h=>sig(h.up_rate,h.ci)?1:.35),
+    ci: Hh.map(h=>h.ci), yFmt: v=>Math.round(v*100)+'%', yMin: 0.3, yMax: 0.7, ref: 0.5, labelEvery: 3,
+    tip: i => tipRows(`${hourLabel(Hh[i].hour)} ${tz}`, [['Up rate', pct(Hh[i].up_rate)], ['95% range', `±${pct(Hh[i].ci)}`], ['Windows', int(Hh[i].n)], ['Verdict', sig(Hh[i].up_rate,Hh[i].ci)?'clear of chance':'within noise']])});
+  barChart($('cHourMove'), {labels: hl, values: Hh.map(h=>h.med_abs_move), colors: Hh.map(()=>COL.s2), yFmt: v=>usd(v), labelEvery: 3,
+    tip: i => tipRows(`${hourLabel(Hh[i].hour)} ${tz}`, [['Median move', usd(Hh[i].med_abs_move)], [`Within ${usd(S.step)}`, pct(Hh[i].within_25,0)], ['Avg volume', int(Hh[i].avg_volume)]])});
+
+  const MH = S.move_hist;
+  barChart($('cHist'), {labels: MH.map((b,i) => b.lo<=-1e8 ? '' : ((i-1) % 4 === 0 ? (b.lo<0?'−':'+')+usd(Math.abs(b.lo)) : '')),
+    values: MH.map(b=>b.count), colors: MH.map(b => b.lo >= 0 ? COL.up : COL.down), yFmt: v=>int(v), labelEvery: 1,
+    tip: i => tipRows(MH[i].bucket, [['Windows', int(MH[i].count)], ['Share', pct(MH[i].count/o.windows)]])});
+
+  const RL = S.streaks.run_lengths, rk = Object.keys(RL).sort((a,b)=>a-b);
+  barChart($('cRuns'), {labels: rk.map(k => k==='10'?'10+':k), values: rk.map(k=>RL[k]), colors: rk.map(()=>COL.s1), yFmt: v=>int(v), H: 180, labelEvery: 1,
+    tip: i => tipRows(`Runs of ${rk[i]==='10'?'10 or more':rk[i]}`, [['Count', int(RL[rk[i]])]])});
+  const cond = S.streaks.conditional, condNames = {after_1_up:'1 Up', after_2_up:'2 Ups in a row', after_3_up:'3 Ups in a row', after_1_down:'1 Down', after_2_down:'2 Downs in a row', after_3_down:'3 Downs in a row'};
+  $('condBody').innerHTML = Object.keys(condNames).filter(k=>cond[k]).map(k => { const c = cond[k];
+    return `<tr><td style="font-family:var(--sans)">${condNames[k]}</td><td>${int(c.n)}</td><td class="${sig(c.up_rate,c.ci)?'sig':''}">${pct(c.up_rate)}</td><td>±${pct(c.ci)}</td></tr>`; }).join('');
+
+  const rowsFor = (arr, key) => arr.map(r => `<tr><td>${r[key]}</td><td>${int(r.n)}</td><td class="${sig(r.up_rate,r.ci)?'sig':''}">${pct(r.up_rate)}</td><td>±${pct(r.ci)}</td><td>${usd(r.med_abs_move)}</td><td>${pct(r.within_25,0)}</td></tr>`).join('');
+  $('wdBody').innerHTML = rowsFor(S.weekday, 'weekday');
+  $('slotBody').innerHTML = rowsFor(S.slots, 'slot');
+
+  // calibration
+  const cal = S.calibration || {}, marks = Object.keys(cal);
+  if (!marks.length){
+    $('calibWrap').innerHTML = `<div class="empty">Needs Kalshi's price history. Run <code>python history.py --candles</code> (all windows, slow) or <code>python history.py --candles-days 14</code> (last two weeks).</div>`;
+  } else {
+    const pick = m => {
+      const rows = cal[m];
+      $('calibWrap').innerHTML = `<div class="tabs">${marks.map(k=>`<button data-m="${k}" class="${k===m?'on':''}">${k.replace('m',' min')} before close</button>`).join('')}</div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Actual up rate</span><span><i class="line" style="background:var(--muted)"></i>Kalshi's average price in the bucket</span></div>
+        <div class="chart" id="cCal"></div>
+        <table style="margin-top:10px"><thead><tr><th>Kalshi Yes mid</th><th>Windows</th><th>Avg price</th><th>Actually Up</th><th>±95%</th><th>Edge buying Yes</th><th>Edge buying No</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr><td>${r.bucket}</td><td>${int(r.n)}</td><td>${(r.avg_mid*100).toFixed(1)}¢</td><td>${pct(r.up_rate)}</td><td>±${pct(r.ci)}</td>
+          <td class="${r.ev_buy_yes>0?'sig':''}">${cents(r.ev_buy_yes)}</td><td class="${r.ev_buy_no>0?'sig':''}">${cents(r.ev_buy_no)}</td></tr>`).join('')}</tbody></table>`;
+      barChart($('cCal'), {labels: rows.map(r=>r.bucket), values: rows.map(r=>r.up_rate), colors: rows.map(()=>COL.s1), ci: rows.map(r=>r.ci),
+        yFmt: v=>Math.round(v*100)+'%', yMin: 0, yMax: 1, labelEvery: 1,
+        tip: i => tipRows(rows[i].bucket, [['Kalshi avg', (rows[i].avg_mid*100).toFixed(1)+'¢'], ['Actually Up', pct(rows[i].up_rate)], ['Windows', int(rows[i].n)]])});
+      // overlay Kalshi's own price as tick marks
+      const svg = $('cCal').querySelector('svg'), W = svg.viewBox.baseVal.width, mg = {l:56,r:12,t:10,b:28}, H = 220, pw = W-mg.l-mg.r, ph = H-mg.t-mg.b, slot = pw/rows.length;
+      rows.forEach((r,i) => { const y = mg.t + ph - r.avg_mid*ph, x0 = mg.l + i*slot + 4, x1 = mg.l + (i+1)*slot - 4;
+        const ln = document.createElementNS('http://www.w3.org/2000/svg','line');
+        Object.entries({x1:x0, x2:x1, y1:y, y2:y, stroke:COL.ink2, 'stroke-width':2, 'stroke-dasharray':'4 3'}).forEach(([k,v])=>ln.setAttribute(k,v));
+        svg.insertBefore(ln, svg.querySelector('.hit')); });
+      $('calibWrap').querySelectorAll('[data-m]').forEach(b => b.onclick = () => pick(b.dataset.m));
+    };
+    pick(marks.includes('2m') ? '2m' : marks[0]);
+  }
+
+  $('dayBody').innerHTML = D.slice().reverse().map(d => `<tr><td>${d.date}</td><td>${int(d.n)}</td><td>${d.up}</td><td>${d.down}</td><td>${pct(d.up_rate)}</td>
+    <td>${usd(d.med_abs_move)}</td><td>${usd(d.max_abs_move)}</td><td>${pct(d.within_25,0)}</td><td>${usd(d.btc_open, S.decimals)}</td><td>${usd(d.btc_close, S.decimals)}</td><td>${int(d.volume)}</td></tr>`).join('');
+
+  $('foot').innerHTML = `Source: Kalshi public market data for series ${S.series} (price to beat = <code>floor_strike</code>, settlement = <code>expiration_value</code>, result = <code>result</code>). `
+    + `${o.result_mismatches ? int(o.result_mismatches)+' windows where the result disagreed with settle ≥ price to beat (worth a look). ' : 'Every result matches settle ≥ price to beat. '}`
+    + (location.hostname.endsWith('github.io') ? `Download the data: <a href="data/windows.csv">windows.csv</a> · <a href="data/daily.csv">daily.csv</a> · <a href="data/hourly.csv">hourly.csv</a> · <a href="data/weekday.csv">weekday.csv</a> · <a href="data/validation.json">validation.json</a>. ` : '')
+    + `Highlighted numbers are clear of the 95% chance range; with ${o.days} days of data, expect a few highlights by luck alone. Past patterns don't guarantee future results. Generated ${S.generated_utc.replace('T',' ').slice(0,16)} UTC.`;
+}
+// ---------- colors that follow the colorblind toggle ----------
+function refreshCol(){ COL.up = css('--up'); COL.down = css('--down'); }
+try { if (localStorage.getItem('btc15cb') === '1') document.body.classList.add('cb'); } catch(e){}
+function syncToggle(){ const on = document.body.classList.contains('cb'); $('cbToggle').textContent = 'Colorblind colors: ' + (on?'on':'off'); $('cbToggle').setAttribute('aria-pressed', on); }
+$('cbToggle').addEventListener('click', () => { document.body.classList.toggle('cb'); try { localStorage.setItem('btc15cb', document.body.classList.contains('cb')?'1':'0'); } catch(e){} syncToggle(); render(SUMMARY); });
+syncToggle();
+
+// ---------- stacked Up/Down bars per day ----------
+function stackedBars(el, {labels, a, b, tip, H=240}){
+  const tot = a.map((v,i)=>v+b[i]), hi = Math.max(...tot, 1);
+  const F = frame(el, H, 0, hi, v=>int(v));
+  const n = labels.length, slot = F.pw / n, bw = Math.max(1, slot - (slot > 4 ? 2 : 0.5)), gap = bw > 3 ? 2 : 0;
+  let s = F.s;
+  for (let i=0;i<n;i++){
+    const x0 = F.m.l + i*slot + (slot-bw)/2, base = F.y(0), ya = F.y(a[i]), yt = F.y(tot[i]);
+    s += `<rect x="${x0}" y="${ya}" width="${bw}" height="${Math.max(0, base-ya)}" fill="${COL.up}"/>`;
+    if (b[i]) s += `<rect x="${x0}" y="${yt}" width="${bw}" height="${Math.max(0, ya-yt-gap)}" fill="${COL.down}" rx="${Math.min(3,bw/2)}"/>`;
+  }
+  const every = Math.max(1, Math.ceil(n / Math.floor(F.pw/70)));
+  labels.forEach((lab,i) => { if (i % every === 0) s += `<text x="${F.m.l + i*slot + slot/2}" y="${H-8}" text-anchor="middle" fill="${COL.muted}" font-size="11">${lab}</text>`; });
+  s += `<line id="hx" x1="0" x2="0" y1="${F.m.t}" y2="${F.m.t+F.ph}" stroke="${COL.ink2}" opacity="0"/>`;
+  s += `<rect x="${F.m.l}" y="${F.m.t}" width="${F.pw}" height="${F.ph}" fill="transparent" class="hit"/></svg>`;
+  el.innerHTML = s; const t = mkTip(el), svg = el.querySelector('svg'), hx = svg.querySelector('#hx');
+  svg.querySelector('.hit').addEventListener('mousemove', e => {
+    const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * F.W / r.width;
+    const i = Math.max(0, Math.min(n-1, Math.floor((sx - F.m.l) / slot))), cx = F.m.l + i*slot + slot/2;
+    hx.setAttribute('x1', cx); hx.setAttribute('x2', cx); hx.setAttribute('opacity', .4);
+    placeTip(el, t, tip(i), cx * r.width / F.W, e.clientY - r.top);
+  });
+  svg.querySelector('.hit').addEventListener('mouseleave', () => { t.style.display='none'; hx.setAttribute('opacity',0); });
+}
+
+// ---------- every-window grid ----------
+function drawGrid(S){
+  const G = S.grid || [], wrap = $('gridWrap'), cv = $('grid'), tip = $('gridTip');
+  if (!G.length){ wrap.innerHTML = '<div class="empty">No windows.</div>'; return; }
+  const rows = G.slice().reverse(), cols = 96, left = 78, top = 22;
+  const W = Math.max(360, wrap.clientWidth), cw = Math.max(2, (W - left - 4) / cols), ch = Math.max(6, Math.min(12, cw));
+  const H = top + rows.length * ch + 2, dpr = window.devicePixelRatio || 1;
+  cv.width = W*dpr; cv.height = H*dpr; cv.style.width = W+'px'; cv.style.height = H+'px';
+  const c = cv.getContext('2d'); c.scale(dpr, dpr);
+  c.fillStyle = css('--surface'); c.fillRect(0,0,W,H);
+  c.font = '11px system-ui'; c.fillStyle = COL.muted; c.textAlign = 'center';
+  for (let h=0; h<24; h+=3){ const x = left + h*4*cw; c.fillText(((h%12)||12) + (h<12?'a':'p'), x + 2*cw, 14); }
+  const empty = css('--surface-2'), gapPx = cw > 4 ? 1 : 0;
+  rows.forEach((d, r) => {
+    const y = top + r*ch;
+    c.fillStyle = COL.muted; c.textAlign = 'right'; if (ch >= 9 || r % 2 === 0) c.fillText(d.date.slice(2), left - 8, y + ch - 2);
+    for (let k=0; k<cols; k++){
+      const ch_ = d.cells[k] || '.';
+      c.fillStyle = ch_ === 'U' ? COL.up : ch_ === 'D' ? COL.down : empty;
+      c.fillRect(left + k*cw, y, cw - gapPx, ch - 1);
+    }
+  });
+  cv.onmousemove = e => {
+    const b = cv.getBoundingClientRect(), x = e.clientX - b.left, y = e.clientY - b.top;
+    const k = Math.floor((x - left) / cw), r = Math.floor((y - top) / ch);
+    if (k < 0 || k >= cols || r < 0 || r >= rows.length){ tip.style.display='none'; return; }
+    const d = rows[r], v = d.cells[k] || '.', mins = k*15, hh = String(Math.floor(mins/60)).padStart(2,'0'), mm = String(mins%60).padStart(2,'0');
+    const endm = mins + 15, eh = String(Math.floor(endm/60)%24).padStart(2,'0'), em = String(endm%60).padStart(2,'0');
+    tip.innerHTML = `<div class="k">${d.date} · ${hh}:${mm}–${eh}:${em} ${S.tz}</div><div>${v==='U'?'▲ Up':v==='D'?'▼ Down':'no window'}</div>`;
+    tip.style.display = 'block';
+    tip.style.left = Math.min(x + 12 + wrap.scrollLeft, wrap.scrollWidth - tip.offsetWidth - 4) + 'px';
+    tip.style.top = (y + wrap.scrollTop - 34) + 'px';
+  };
+  cv.onmouseleave = () => tip.style.display = 'none';
+  $('gridDesc').textContent = `Each row is a day (newest on top); each cell is one 15-minute window, midnight to midnight ${S.tz}. Hover a cell for details.`;
+}
+
+// ---------- validation ----------
+function drawValidation(S){
+  const V = S.validation;
+  if (!V){ $('valWrap').innerHTML = '<div class="empty">Not checked yet. Run <code>python validate.py</code> (or double-click <b>validate_history.bat</b>) to verify this data against Kalshi\'s own rules and an independent price source.</div>'; return; }
+  const icon = {PASS:'✓', WARN:'!', FAIL:'✕', INFO:'i'};
+  let h = `<p class="desc">Checked ${V.generated_utc.replace('T',' ').slice(0,16)} UTC · ${V.counts.PASS||0} passed, ${V.counts.WARN||0} warnings, ${V.counts.FAIL||0} failed.</p>`;
+  h += '<div style="overflow-x:auto"><table><thead><tr><th>Check</th><th>Result</th><th style="text-align:left">Details</th></tr></thead><tbody>';
+  h += V.checks.map(c => `<tr><td class="l">${c.name}</td><td><span class="status ${c.status}">${icon[c.status]} ${c.status}</span></td><td class="l" style="color:var(--ink-2)">${c.detail}</td></tr>`).join('');
+  h += '</tbody></table></div>';
+  if (V.spot_check && V.spot_check.length){
+    h += `<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--ink-2);font-size:13px">Spot-check these ${V.spot_check.length} windows on kalshi.com</summary><div style="overflow-x:auto"><table><thead><tr><th>Window</th><th>Our price to beat</th><th>Our settlement</th><th>Our result</th></tr></thead><tbody>` +
+      V.spot_check.map(w => `<tr><td class="l"><a href="${w.url}" target="_blank" rel="noopener">${w.ticker}</a></td><td>${usd(w.strike,S.decimals)}</td><td>${usd(w.settle_value,S.decimals)}</td><td>${w.result==='yes'?'▲ Up':'▼ Down'}</td></tr>`).join('') + '</tbody></table></div></details>';
+  }
+  $('valWrap').innerHTML = h;
+}
+
+// ---------- progression lab ----------
+const feeTot = (n, p) => n <= 0 ? 0 : Math.ceil(0.07 * n * p * (1-p) * 100 - 1e-9) / 100;
+function labCfg(){
+  const v = id => $(id).value;
+  return {rule: v('L_rule'), n: Math.max(1, +v('L_n')||3), stake: v('L_stake'), k: Math.max(1, +v('L_k')||6), base: Math.max(1, +v('L_base')||10),
+    bank: Math.max(10, +v('L_bank')||5000), maxBet: Math.max(1, +v('L_max')||5000), pricemode: v('L_pricemode'),
+    price: Math.min(0.99, Math.max(0.01, (+v('L_price')||51)/100)), bust: v('L_bust'), range: v('L_range')};
+}
+function labSlice(seq, range){
+  if (range === 'all') return seq;
+  if (range === 'first') return seq.slice(0, Math.floor(seq.length/2));
+  if (range === 'second') return seq.slice(Math.floor(seq.length/2));
+  const days = range === 'last30' ? 30 : 7, cut = seq[seq.length-1][0] - days*86400;
+  return seq.filter(r => r[0] > cut);
+}
+function simulate(seq, cfg, outcomes, keepCurve){
+  // seq rows: [close_ts, up(1/0), upAsk, downAsk]; outcomes overrides results (for the luck test)
+  const res = i => outcomes ? outcomes[i] : seq[i][1];
+  let bank = cfg.bank, deposited = cfg.bank, peak = bank, maxDD = 0, cumLoss = 0, step = 0, unit = 1, side = 'up';
+  let bets = 0, wins = 0, fees = 0, maxCost = 0, lossRun = 0, worstRun = 0, busts = 0, capped = 0, fallback = 0, blownAt = null, volume = 0;
+  const curve = [], dep = [], ts = [];
+  for (let i = 0; i < seq.length; i++){
+    // which side?
+    let pick = null;
+    const last = i > 0 ? res(i-1) : null;
+    if (cfg.rule === 'up') pick = 'up';
+    else if (cfg.rule === 'down') pick = 'down';
+    else if (cfg.rule === 'follow') pick = last == null ? null : (last ? 'up' : 'down');
+    else if (cfg.rule === 'fade') pick = last == null ? null : (last ? 'down' : 'up');
+    else if (cfg.rule === 'switch') pick = side;
+    else if (i >= cfg.n){
+      let same = true; for (let j = 2; j <= cfg.n; j++) if (res(i-j) !== last) { same = false; break; }
+      if (same) pick = cfg.rule === 'fadeStreak' ? (last ? 'down' : 'up') : (last ? 'up' : 'down');
+    }
+    if (!pick) continue;
+    // entry price
+    let p = cfg.price;
+    if (cfg.pricemode === 'kalshi'){ const a = pick === 'up' ? seq[i][2] : seq[i][3]; if (a != null && a > 0 && a < 1) p = a; else fallback++; }
+    const net1 = (1 - p) - 0.07 * p * (1 - p);       // profit per contract after fee, before rounding
+    // how many contracts?
+    let n;
+    if (cfg.stake === 'flat') n = Math.max(1, Math.floor(cfg.base / p));
+    else if (cfg.stake === 'dalembert') n = Math.max(1, Math.floor(cfg.base * unit / p));
+    else { const need = cumLoss + cfg.base; n = Math.max(1, Math.ceil(need / net1)); while (n*(1-p) - feeTot(n,p) < need - 1e-9) n++; }
+    let cost = n * p + feeTot(n, p);
+    if (cost > cfg.maxBet){ n = Math.max(1, Math.floor(cfg.maxBet / (p * 1.02))); cost = n * p + feeTot(n, p); capped++; }
+    if (cost > bank){
+      busts++; if (blownAt == null) blownAt = seq[i][0];
+      if (cfg.bust === 'stop') break;
+      deposited += cfg.bank; bank += cfg.bank; cumLoss = 0; step = 0; unit = 1;
+      if (cost > bank) continue;
+    }
+    const f = feeTot(n, p), won = (pick === 'up') === (res(i) === 1);
+    const pnl = won ? n * (1 - p) - f : -(n * p + f);
+    bank += pnl; bets++; fees += f; volume += n * p; maxCost = Math.max(maxCost, cost);
+    if (won){ wins++; cumLoss = 0; step = 0; unit = Math.max(1, unit - 1); lossRun = 0; }
+    else {
+      cumLoss += -pnl; step++; unit++; lossRun++; worstRun = Math.max(worstRun, lossRun);
+      if (cfg.stake === 'capped' && step >= cfg.k){ cumLoss = 0; step = 0; }
+      if (cfg.rule === 'switch') side = side === 'up' ? 'down' : 'up';
+    }
+    peak = Math.max(peak, bank - (deposited - cfg.bank)); maxDD = Math.max(maxDD, peak - (bank - (deposited - cfg.bank)));
+    if (keepCurve){ curve.push(bank); dep.push(deposited); ts.push(seq[i][0]); }
+  }
+  return {pnl: bank - deposited, bank, deposited, bets, wins, fees, maxCost, maxDD, worstRun, busts, capped, fallback, blownAt, volume, curve, dep, ts};
+}
+const money = v => (v<0?'−':v>0?'+':'') + '$' + Math.abs(v).toLocaleString('en-US', {maximumFractionDigits: 0});
+function runLab(){
+  const S = SUMMARY; if (!S || !S.seq) return;
+  const cfg = labCfg(), seq = labSlice(S.seq, cfg.range);
+  $('L_n').disabled = !['fadeStreak','followStreak'].includes(cfg.rule); $('L_k').disabled = cfg.stake !== 'capped';
+  const r = simulate(seq, cfg, null, true);
+  const d = t => new Date(t*1000).toISOString().slice(0,10);
+  const tiles = [
+    ['Profit / loss', `<span class="${r.pnl>=0?'pos':'neg'}">${money(r.pnl)}</span>`, `${r.busts ? (cfg.bust==='stop' ? 'account blown '+d(r.blownAt) : r.busts+' re-deposits') : 'never ran out of money'}`],
+    ['Bets placed', int(r.bets), `won ${r.bets ? pct(r.wins/r.bets) : '—'}`],
+    ['Fees paid', '$'+int(r.fees), `on $${int(r.volume)} of bets`],
+    ['Largest single bet', '$'+int(r.maxCost), r.capped ? `${int(r.capped)} bets hit the max-bet cap` : 'never hit the max-bet cap'],
+    ['Worst drawdown', '$'+int(r.maxDD), `longest losing streak ${r.worstRun}`],
+  ];
+  $('labRes').innerHTML = tiles.map(([l,v,n]) => `<div class="tile"><div class="lab">${l}</div><div class="val num">${v}</div><div class="note">${n}</div></div>`).join('')
+    + (cfg.pricemode==='kalshi' && r.fallback ? `<div class="note muted" style="grid-column:1/-1;font-size:12px">${int(r.fallback)} bets used the assumed price because Kalshi's price wasn't downloaded for that window (run <code>python history.py --candles</code>).</div>` : '');
+  // equity curve (downsampled)
+  const stepN = Math.max(1, Math.ceil(r.curve.length / 1200)), idx = [];
+  for (let i = 0; i < r.curve.length; i += stepN) idx.push(i);
+  if (r.curve.length && idx[idx.length-1] !== r.curve.length-1) idx.push(r.curve.length-1);
+  if (!idx.length){ $('cEquity').innerHTML = '<div class="empty">No bets placed with these settings.</div>'; }
+  else {
+    const labels = idx.map(i => d(r.ts[i]).slice(5)), vals = idx.map(i => r.curve[i]), deps = idx.map(i => r.dep[i]);
+    const ylo = Math.min(0, ...vals, ...deps), yhi = Math.max(...vals, ...deps);
+    lineChart($('cEquity'), {labels, values: vals, color: COL.s1, yFmt: v => '$'+int(v), yMin: ylo, yMax: yhi,
+      tip: j => tipRows(d(r.ts[idx[j]]), [['Account', '$'+int(vals[j])], ['Money put in', '$'+int(deps[j])], ['Bet #', int(idx[j]+1)]])});
+    // "money put in" as a dashed reference line on the same axis
+    const sv = $('cEquity').querySelector('svg'), W = sv.viewBox.baseVal.width, H = 220, m = {l:56,r:12,t:10,b:28}, ph = H-m.t-m.b, pw = W-m.l-m.r;
+    const y = v => m.t + ph - (v-ylo)/((yhi-ylo)||1)*ph, x = i => m.l + (labels.length===1 ? pw/2 : i/(labels.length-1)*pw);
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', deps.map((v,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(v).toFixed(1)).join(''));
+    path.setAttribute('fill','none'); path.setAttribute('stroke', COL.muted); path.setAttribute('stroke-width','1.5'); path.setAttribute('stroke-dasharray','5 4');
+    sv.insertBefore(path, sv.querySelector('#hx'));
+  }
+  // comparison table
+  const rules = [['up','Always Up'],['down','Always Down'],['follow','Same as last'],['fade','Opposite of last'],['switch','Switch after a loss'],
+                 ['fadeStreak',`Fade ${cfg.n} in a row`],['followStreak',`Follow ${cfg.n} in a row`]];
+  const stakes = ['flat','dalembert','capped','martingale'];
+  $('cmpBody').innerHTML = rules.map(([k,l]) => '<tr><td class="l">'+l+'</td>' + stakes.map(st => {
+    const x = simulate(seq, Object.assign({}, cfg, {rule:k, stake:st}), null, false);
+    const blown = x.busts && cfg.bust==='stop';
+    return `<td class="${x.pnl>=0?'pos':'neg'}">${money(x.pnl)}${blown?' <span class="muted">blown</span>':''}</td>`; }).join('') + '</tr>').join('');
+  $('luckOut').innerHTML = '';
+}
+function luckTest(){
+  const S = SUMMARY, cfg = labCfg(), seq = labSlice(S.seq, cfg.range), N = 200;
+  const actual = simulate(seq, cfg, null, false).pnl, base = seq.map(r => r[1]), out = [];
+  for (let t = 0; t < N; t++){
+    const o = base.slice(); for (let i = o.length-1; i > 0; i--){ const j = Math.floor(Math.random()*(i+1)); [o[i],o[j]] = [o[j],o[i]]; }
+    out.push(simulate(seq, cfg, o, false).pnl);
+  }
+  out.sort((a,b)=>a-b);
+  const better = out.filter(v => v >= actual).length, med = out[Math.floor(N/2)], p05 = out[Math.floor(N*0.05)], p95 = out[Math.floor(N*0.95)];
+  const verdict = better/N < 0.05 ? 'The real sequence did better than 95% of shuffles: this rule may be using a real pattern. Re-check it on the other half of the data before trusting it.'
+    : 'The real sequence was not unusual compared with shuffled results: whatever this rule earned or lost is consistent with luck, not a pattern in the order of Ups and Downs.';
+  $('luckOut').innerHTML = `<div class="callout" style="border-color:var(--s1)"><b>Luck test.</b> Same Ups and Downs, randomly re-ordered ${N} times. Real result ${money(actual)}; shuffled results: median ${money(med)}, middle 90% from ${money(p05)} to ${money(p95)}. ${int(better)} of ${N} shuffles did as well or better. ${verdict}</div>`;
+}
+let labTimer;
+$('lab').addEventListener('input', () => { clearTimeout(labTimer); labTimer = setTimeout(runLab, 150); });
+$('L_luck').addEventListener('click', () => { $('luckOut').innerHTML = '<div class="empty">Running…</div>'; setTimeout(luckTest, 30); });
+
+function renderExtras(S){
+  if (!S || S.empty) return;
+  refreshCol();
+  drawValidation(S);
+  const D = S.daily;
+  stackedBars($('cUpDown'), {labels: D.map(d=>d.date.slice(5)), a: D.map(d=>d.up), b: D.map(d=>d.down),
+    tip: i => tipRows(D[i].date, [['▲ Up', D[i].up], ['▼ Down', D[i].down], ['Up rate', pct(D[i].up_rate)]])});
+  drawGrid(S);
+  runLab();
+}
+
+const _render = render;
+render = S => { refreshCol(); _render(S); renderExtras(S); };
+// links between the BTC / ETH / SOL reports, wherever the report is being viewed
+function coinNav(cur){
+  const coins = ['BTC','ETH','SOL'];
+  let href = null;
+  if (['localhost','127.0.0.1'].includes(location.hostname) || location.hostname.endsWith('.app.github.dev')) href = c => `/history?asset=${c}`;
+  else if (location.hostname.endsWith('github.io')){
+    const root = location.pathname.replace(/(eth|sol)\/(index\.html)?$/, '').replace(/index\.html$/, '');
+    href = c => root + (c === 'BTC' ? '' : c.toLowerCase() + '/');
+  }
+  $('coinNav').innerHTML = href ? coins.map(c => `<a href="${href(c)}" style="margin-left:0;font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid ${c===cur?'var(--s1)':'var(--ring)'};color:${c===cur?'var(--ink)':'var(--ink-2)'};text-decoration:none">${c}</a>`).join(' ') : '';
+}
+render(SUMMARY);
+let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => render(SUMMARY), 150); });
+</script>
+</body>
+</html>

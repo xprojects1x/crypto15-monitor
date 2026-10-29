@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crypto 15m Monitor</title>
+<link rel="stylesheet" href="/static/vendor/uPlot.min.css">
+<style>
+:root{
+  color-scheme:dark;
+  --page:#0d0d0d; --surface:#1a1a19; --surface-2:#222220; --line:#2c2c2a; --axis:#383835;
+  --ink:#f0efec; --ink-2:#c3c2b7; --muted:#898781; --ring:rgba(255,255,255,.10);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --good:#0ca30c; --warn:#fab219; --crit:#d03b3b;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:14px/1.4 var(--sans)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);
+  position:sticky;top:0;background:rgba(13,13,13,.92);backdrop-filter:blur(6px);z-index:5;flex-wrap:wrap}
+header h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.01em}
+.pill{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--ring);color:var(--ink-2)}
+.pill.demo{border-color:var(--warn);color:var(--warn)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:1px}
+.dot.on{background:var(--good)} .dot.off{background:var(--crit)}
+.grow{flex:1}
+#countdown{font-size:22px;font-weight:650}
+#countdown.hot{color:var(--warn)}
+main{padding:16px 20px 40px;display:grid;gap:14px;grid-template-columns:minmax(0,1fr) 380px;max-width:1600px;margin:0 auto}
+@media (max-width:1100px){main{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:14px 16px}
+.card h2{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:0 0 10px}
+.tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+@media (max-width:900px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tile{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:12px 14px;min-width:0}
+.tile .lab{font-size:12px;color:var(--muted)}
+.tile .val{font-size:22px;font-weight:650;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .sub{font-size:12px;color:var(--ink-2);margin-top:2px;line-height:1.35}
+.up{color:var(--good)} .down{color:var(--crit)}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+/* signal */
+#signal{display:grid;grid-template-columns:200px 1fr;gap:16px;align-items:start}
+@media (max-width:700px){#signal{grid-template-columns:1fr}}
+.action{border-radius:10px;padding:16px;text-align:center;background:var(--surface-2);border:1px solid var(--ring)}
+.action .big{font-size:26px;font-weight:750;letter-spacing:.02em}
+.action.buy-up{border-color:var(--good)} .action.buy-up .big{color:var(--good)}
+.action.buy-down{border-color:var(--crit)} .action.buy-down .big{color:var(--crit)}
+.action .icon{font-size:13px;color:var(--ink-2);margin-top:4px}
+.reasons{margin:8px 0 0;padding-left:18px;color:var(--ink-2);font-size:13px}
+.reasons li{margin:2px 0}
+.note{font-size:12px;color:var(--warn);margin-top:6px}
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;font-weight:600;color:var(--muted);text-align:right;padding:4px 6px;border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}
+td{padding:6px;text-align:right;border-bottom:1px solid var(--line);font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:13px}
+th:first-child,td:first-child{text-align:left}
+tr:last-child td{border-bottom:none}
+.btn{font:inherit;font-size:13px;font-weight:600;padding:6px 12px;border-radius:7px;border:1px solid var(--ring);
+  background:var(--surface-2);color:var(--ink);cursor:pointer}
+.btn:hover{border-color:var(--ink-2)}
+.btn.up{border-color:rgba(12,163,12,.6);color:var(--good)} .btn.down{border-color:rgba(208,59,59,.7);color:#e66767}
+.btn.small{padding:3px 8px;font-size:12px}
+.btn:disabled{opacity:.4;cursor:default}
+.chart-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.chart-head h2{margin:0}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-2)}
+.legend i{display:inline-block;width:14px;height:2px;vertical-align:3px;margin-right:5px;border-radius:2px}
+.legend i.dash{background:repeating-linear-gradient(90deg,var(--ink-2) 0 4px,transparent 4px 7px)!important}
+.legend i.band{height:8px;vertical-align:0;opacity:.35}
+.chart{width:100%;min-height:260px}
+.uplot{font-family:var(--sans)}
+.u-legend{display:none}
+.tip{position:absolute;pointer-events:none;background:#0d0d0d;border:1px solid var(--ring);border-radius:7px;
+  padding:7px 9px;font-size:12px;color:var(--ink);z-index:4;white-space:nowrap;display:none}
+.tip .row{display:flex;gap:10px;justify-content:space-between}
+.tip .k{color:var(--ink-2)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+.kv span:nth-child(odd){color:var(--muted)}
+.kv span:nth-child(even){text-align:right;font-family:var(--mono)}
+.err{color:#e66767;font-size:12px;margin-top:6px;word-break:break-word}
+.muted{color:var(--muted)}
+form.cfg{display:grid;grid-template-columns:1fr 92px;gap:6px 10px;align-items:center;font-size:13px}
+form.cfg label{color:var(--ink-2)}
+form.cfg input,form.cfg select{font:inherit;font-family:var(--mono);font-size:13px;background:var(--page);color:var(--ink);
+  border:1px solid var(--ring);border-radius:6px;padding:4px 6px;width:100%}
+.badge{font-family:var(--sans);font-size:11px;font-weight:650;padding:1px 6px;border-radius:5px}
+.badge.yes{background:rgba(12,163,12,.18);color:var(--good)} .badge.no{background:rgba(208,59,59,.2);color:#e66767}
+.scroll{max-height:320px;overflow:auto}
+details summary{cursor:pointer;color:var(--ink-2);font-size:13px}
+.team-top{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+@media (max-width:900px){.team-top{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.team-top .tile{background:var(--surface-2)}
+.status{font-family:var(--sans);font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;white-space:nowrap}
+.status.ok{background:rgba(12,163,12,.18);color:var(--good)} .status.wait{background:rgba(250,178,25,.16);color:var(--warn)}
+.status.no{background:rgba(208,59,59,.2);color:#e66767} .status.neutral{background:var(--surface-2);color:var(--ink-2)}
+.agname{font-family:var(--sans);text-align:left} .agname b{font-weight:600} .agname span{display:block;font-size:11px;color:var(--muted)}
+.bar{display:inline-block;height:6px;border-radius:3px;background:var(--s1);vertical-align:1px;margin-right:6px}
+.tablewrap{overflow-x:auto}
+.tabs{display:flex;gap:4px}
+.tabs button{font:inherit;font-size:13px;font-weight:650;padding:4px 12px;border-radius:7px;border:1px solid var(--ring);background:transparent;color:var(--ink-2);cursor:pointer}
+.tabs button.on{background:var(--surface-2);border-color:var(--s1);color:var(--ink)}
+.overview{display:flex;gap:10px;flex-wrap:wrap;padding:8px 20px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-2)}
+.ov{display:flex;gap:8px;align-items:center;padding:4px 10px;border:1px solid var(--ring);border-radius:8px;cursor:pointer;background:var(--surface)}
+.ov.on{border-color:var(--s1)} .ov b{color:var(--ink)}
+.st-active{background:rgba(12,163,12,.18);color:var(--good)} .st-prob{background:var(--surface-2);color:var(--ink-2)}
+.chip{font-family:var(--sans);font-size:11px;font-weight:650;padding:1px 6px;border-radius:5px;white-space:nowrap}
+.flowline{font-size:12px;color:var(--ink-2);margin-top:8px;line-height:1.6}
+.log{list-style:none;margin:8px 0 0;padding:0;font-size:12px;color:var(--ink-2)}
+.log li{padding:3px 0;border-bottom:1px solid var(--line)}
+form.cfg .grp{grid-column:1/-1;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:8px}
+footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="assetName">BTC</span> 15-min · Kalshi monitor</h1>
+  <div class="tabs" id="assetTabs" role="tablist" aria-label="Coin"></div>
+  <span id="demo" class="pill demo" hidden>DEMO DATA</span>
+  <span class="pill"><span id="conn" class="dot"></span><span id="connTxt">connecting</span></span>
+  <span class="pill num" id="ticker">—</span>
+  <a class="pill" id="histLink" href="/history" target="_blank" style="text-decoration:none">History ↗</a>
+  <span class="grow"></span>
+  <span class="muted" style="font-size:12px">time left</span>
+  <span id="countdown" class="num">--:--</span>
+</header>
+<div class="overview" id="overview"></div>
+
+<main>
+  <div class="col">
+    <section class="tiles">
+      <div class="tile"><div class="lab"><span class="idxName">BRTI</span> proxy (calibrated)</div><div class="val num" id="tSpot">—</div><div class="sub num" id="tSpotSub">—</div></div>
+      <div class="tile"><div class="lab">Price to beat</div><div class="val num" id="tStrike">—</div><div class="sub" id="tStrikeSub">—</div></div>
+      <div class="tile"><div class="lab">Settlement average (est.)</div><div class="val num" id="tSettle">—</div><div class="sub num" id="tSettleSub">—</div></div>
+      <div class="tile"><div class="lab">Fair P(Up) vs Kalshi</div><div class="val num" id="tProb">—</div><div class="sub num" id="tProbSub">—</div></div>
+      <div class="tile"><div class="lab">Volatility</div><div class="val num" id="tVol">—</div><div class="sub" id="tVolSub">—</div></div>
+    </section>
+
+    <section class="card">
+      <h2>Signal</h2>
+      <div id="signal">
+        <div class="action" id="action"><div class="big" id="actionBig">WAIT</div><div class="icon" id="actionIcon">—</div></div>
+        <div>
+          <table>
+            <thead><tr><th>Side</th><th>Fair</th><th>Ask</th><th>Fee</th><th>Edge</th><th>Limit idea</th><th></th></tr></thead>
+            <tbody>
+              <tr><td>▲ Up</td><td id="uFair">—</td><td id="uAsk">—</td><td id="uFee">—</td><td id="uEv">—</td><td id="uLim">—</td>
+                <td><button class="btn small up" data-buy="up">Paper buy</button></td></tr>
+              <tr><td>▼ Down</td><td id="dFair">—</td><td id="dAsk">—</td><td id="dFee">—</td><td id="dEv">—</td><td id="dLim">—</td>
+                <td><button class="btn small down" data-buy="down">Paper buy</button></td></tr>
+            </tbody>
+          </table>
+          <ul class="reasons" id="reasons"></ul>
+          <div class="note" id="sigNote"></div>
+          <div class="err" id="tradeErr"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="teamCard">
+      <div class="chart-head"><h2>Agent team</h2><span id="teamStatus" class="status neutral">—</span></div>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">Ten specialists forecast every window and learn from every settlement. Active agents shape the team forecast; agents on probation are scored silently until they prove they help. The risk manager paper-trades only after the team clearly beats Kalshi's own prices.</p>
+      <div class="team-top">
+        <div class="tile"><div class="lab">Team P(Up) now</div><div class="val num" id="tmP">—</div><div class="sub num" id="tmPsub">—</div></div>
+        <div class="tile"><div class="lab">Risk manager</div><div class="val" id="tmAct" style="font-size:18px">—</div><div class="sub" id="tmActSub">—</div></div>
+        <div class="tile"><div class="lab">Team paper account</div><div class="val num" id="tmEq">—</div><div class="sub num" id="tmEqSub">—</div></div>
+        <div class="tile"><div class="lab">Learning</div><div class="val num" id="tmLearn">—</div><div class="sub" id="tmLearnSub">—</div></div>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th style="text-align:left">Agent</th><th title="Active agents shape the team forecast. Agents on probation forecast and learn but have no say until they prove they help.">Status</th><th>P(Up) now</th><th>Influence now</th><th title="Average improvement in the team's forecast (log-loss) because this agent is on it. Positive = helps.">Value added</th>
+          <th title="Recent log-loss advantage over Kalshi's own price. Positive = more accurate than the market.">vs Kalshi</th><th>Hit rate</th><th title="If this agent traded alone: flat size, first checkpoint with enough edge after fees.">Solo paper P&amp;L</th><th>Lessons</th></tr></thead>
+        <tbody id="agBody"></tbody>
+      </table></div>
+      <div class="chart-head" style="margin-top:14px"><h2>Learning progress</h2>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Team forecast error</span><span><i style="background:var(--s2)"></i>Kalshi price error</span><span class="muted">rolling 30 windows · lower is better</span></div>
+      </div>
+      <div class="chart" id="cLearn" style="min-height:180px"></div>
+      <details style="margin-top:8px"><summary>What the team learned recently</summary><ul class="log" id="tmLog"></ul></details>
+    </section>
+
+    <section class="card">
+      <div class="chart-head"><h2><span class="assetName">BTC</span> this window</h2>
+        <div class="legend">
+          <span><i style="background:var(--s1)"></i><span class="idxName">BRTI</span> proxy</span>
+          <span><i style="background:var(--s2)"></i>Est. settlement avg (matches proxy until the final minute)</span>
+          <span><i class="band" style="background:var(--s2)"></i>±1σ</span>
+          <span><i style="background:var(--s3)"></i>Running settle avg (final min)</span>
+          <span><i class="dash"></i>Price to beat</span>
+        </div>
+      </div>
+      <div class="chart" id="cPrice"></div>
+    </section>
+
+    <section class="card">
+      <div class="chart-head"><h2>Up probability: model vs Kalshi (¢)</h2>
+        <div class="legend">
+          <span><i style="background:var(--s1)"></i>Model fair value</span>
+          <span><i style="background:var(--s2)"></i>Kalshi Yes ask</span>
+          <span><i style="background:var(--s3)"></i>Kalshi Yes bid</span>
+        </div>
+      </div>
+      <div class="chart" id="cProb"></div>
+    </section>
+
+    <section class="card">
+      <div class="chart-head"><h2><span class="assetName">BTC</span> last 60 minutes</h2><div class="legend"><span><i style="background:var(--s1)"></i><span class="idxName">BRTI</span> proxy (5s)</span></div></div>
+      <div class="chart" id="cHour" style="min-height:180px"></div>
+    </section>
+
+    <section class="card">
+      <h2>Recent windows · proxy vs Kalshi</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>Close</th><th>Result</th><th>Price to beat</th><th>Kalshi settle</th><th>Our settle</th><th>Tracking err</th><th>Model at close</th></tr></thead>
+        <tbody id="winBody"><tr><td colspan="7" class="muted" style="font-family:var(--sans)">Windows appear here as they settle.</td></tr></tbody>
+      </table></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <h2>Kalshi book</h2>
+      <div class="kv" id="book"></div>
+      <div class="err" id="marketErr"></div>
+    </section>
+
+    <section class="card">
+      <h2>Exchange feeds</h2>
+      <table>
+        <thead><tr><th>Exchange</th><th>Mid</th><th>vs proxy</th><th>Age</th></tr></thead>
+        <tbody id="feedBody"></tbody>
+      </table>
+      <div class="flowline" id="flowLine"></div>
+    </section>
+
+    <section class="card">
+      <h2>Proxy calibration</h2>
+      <div class="kv" id="calib"></div>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Compares our 60-second averages with Kalshi's own strike and settlement values. Lower tracking error = the proxy is closer to the real index.</p>
+    </section>
+
+    <section class="card">
+      <h2>Paper trading</h2>
+      <div class="kv" id="paperStats"></div>
+      <div id="openPos" style="margin-top:10px"></div>
+      <details style="margin-top:10px"><summary>Trade history</summary>
+        <div class="scroll"><table>
+          <thead><tr><th>Window</th><th>Side</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead>
+          <tbody id="histBody"></tbody>
+        </table></div>
+        <button class="btn small" id="resetPaper" style="margin-top:8px">Reset paper account</button>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Strategy settings</h2>
+      <form class="cfg" id="cfg">
+        <label for="min_edge">Min edge to enter (¢)</label><input id="min_edge" data-scale="100" type="number" step="0.5">
+        <label for="no_entry_last_sec">No new entries in last (s)</label><input id="no_entry_last_sec" type="number" step="10">
+        <label for="max_spread">Max Yes spread (¢)</label><input id="max_spread" data-scale="100" type="number" step="1">
+        <label for="exit_margin">Exit when bid beats fair by (¢)</label><input id="exit_margin" data-scale="100" type="number" step="0.5">
+        <label for="contracts">Contracts per trade</label><input id="contracts" type="number" step="1" min="1">
+        <label for="vol_mult">Volatility multiplier</label><input id="vol_mult" type="number" step="0.05">
+        <label for="vol_lookback_sec">Vol lookback (s)</label><input id="vol_lookback_sec" type="number" step="60">
+        <label for="min_feeds">Min live exchanges</label><input id="min_feeds" type="number" step="1" min="1" max="5">
+        <label for="composite">Proxy method</label><select id="composite"><option value="median">median</option><option value="mean">mean</option></select>
+        <label for="use_calibration">Apply calibration offset</label><select id="use_calibration"><option value="true">on</option><option value="false">off</option></select>
+        <span class="grp">Agent team (paper)</span>
+        <label for="auto_trade">Team auto-trades</label><select id="auto_trade"><option value="true">on</option><option value="false">off</option></select>
+        <label for="agent_bankroll">Team bankroll ($)</label><input id="agent_bankroll" type="number" step="100" min="10">
+        <label for="kelly_fraction">Kelly fraction</label><input id="kelly_fraction" type="number" step="0.05" min="0" max="1">
+        <label for="max_bet_pct">Max bet (% of bankroll)</label><input id="max_bet_pct" data-scale="100" type="number" step="0.5">
+        <label for="daily_loss_limit">Daily loss limit ($)</label><input id="daily_loss_limit" type="number" step="10" min="0">
+        <label for="min_learned_windows">Windows to learn before trading</label><input id="min_learned_windows" type="number" step="10" min="0">
+        <label for="probation_windows">Probation length (windows)</label><input id="probation_windows" type="number" step="10" min="20">
+        <label for="avoid_events">Sit out high-impact events</label><select id="avoid_events"><option value="true">yes</option><option value="false">no</option></select>
+        <label for="event_buffer_min">…minutes either side</label><input id="event_buffer_min" type="number" step="5" min="0">
+        <label for="keep_days">Keep tick logs (days)</label><input id="keep_days" type="number" step="10" min="1">
+        <label for="require_proof">Require beating Kalshi first</label><select id="require_proof"><option value="true">yes</option><option value="false">no</option></select>
+        <span></span><button class="btn" type="submit">Save</button>
+      </form>
+      <div class="muted" id="cfgMsg" style="font-size:12px;margin-top:6px">Settings apply to the coin selected at the top.</div>
+      <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
+        <h2 style="margin-bottom:6px">Alerts</h2>
+        <div class="kv" id="alertKv"></div>
+        <button class="btn small" id="testAlert" type="button" style="margin-top:8px">Send test alert + summary</button>
+        <div class="muted" id="alertMsg" style="font-size:12px;margin-top:6px"></div>
+        <details style="margin-top:6px"><summary>Recent alerts</summary><ul class="log" id="alertLog"></ul></details>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    Monitoring and paper trading only. No real orders are placed. The index proxy is built from public exchange feeds and is not the licensed CF Benchmarks index; settlement can differ, especially in close windows. Fair value assumes a random walk with recent realized volatility, which understates jumps. Not financial advice.
+  </footer>
+</main>
+
+<script src="/static/vendor/uPlot.iife.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = {s1:css('--s1'), s2:css('--s2'), s3:css('--s3'), muted:css('--muted'), grid:css('--line'), axis:css('--axis'), ink2:css('--ink-2')};
+let DEC = 2;   // price decimals for the current coin (SOL uses 4)
+const fmtUsd = (v,d) => { d = d ?? DEC; return v==null||isNaN(v) ? '—' : '$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); };
+const money = v => fmtUsd(v, 2), moneyS = v => fmtSigned(v, 2);   // account amounts always in cents
+const fmtSigned = (v,d) => { d = d ?? DEC; return v==null||isNaN(v) ? '—' : (v>=0?'+':'−')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d}); };
+const c = v => v==null||isNaN(v) ? '—' : (v*100).toFixed(1)+'¢';
+const cs = v => v==null||isNaN(v) ? '—' : (v>=0?'+':'−')+Math.abs(v*100).toFixed(1)+'¢';
+const pct = v => v==null ? '—' : (v*100).toFixed(1)+'%';
+const hhmm = ts => new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+
+let S = null;  // latest snapshot
+
+// ---------- charts ----------
+function axes(yFmt){
+  const ax = {stroke:C.muted, grid:{stroke:C.grid, width:1}, ticks:{stroke:C.axis, width:1, size:4}, font:'11px system-ui'};
+  return [ {...ax}, {...ax, size:76, values:(u,vals)=>vals.map(yFmt)} ];
+}
+// price axis: as many decimals as the tick spacing needs (BTC whole dollars, SOL cents or finer)
+const priceAxis = () => {
+  const ax = {stroke:C.muted, grid:{stroke:C.grid, width:1}, ticks:{stroke:C.axis, width:1, size:4}, font:'11px system-ui'};
+  return [ {...ax}, {...ax, size:76, values:(u,vals)=>{ const st = Math.abs((vals[1]??vals[0])-(vals[0]??0)) || 1;
+    const d = Math.max(0, Math.min(4, -Math.floor(Math.log10(st))));
+    return vals.map(v => '$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d})); }} ];
+};
+function tooltipPlugin(rows){
+  let tip;
+  return {hooks:{
+    init: u => { tip = document.createElement('div'); tip.className='tip'; u.over.appendChild(tip); },
+    setCursor: u => {
+      const i = u.cursor.idx;
+      if (i==null){ tip.style.display='none'; return; }
+      const t = u.data[0][i];
+      let h = `<div class="k">${new Date(t*1000).toLocaleTimeString()}</div>`;
+      rows.forEach(([label, si, f]) => { const v = u.data[si][i]; if (v!=null) h += `<div class="row"><span class="k">${label}</span><span class="num">${f(v)}</span></div>`; });
+      tip.innerHTML = h; tip.style.display='block';
+      const left = u.cursor.left, top = u.cursor.top;
+      tip.style.left = (left + 14 + tip.offsetWidth > u.over.clientWidth ? left - tip.offsetWidth - 14 : left + 14) + 'px';
+      tip.style.top = Math.max(0, top - 10) + 'px';
+    }
+  }};
+}
+function settleMarker(withStrike){
+  return {hooks:{draw: u => {
+    if (!S || !S.market) return;
+    const ctx = u.ctx, x = u.valToPos(S.market.close_ts - 60, 'x', true);
+    if (withStrike && S.market.strike != null){
+      const y = u.valToPos(S.market.strike, 'y', true);
+      if (y >= u.bbox.top && y <= u.bbox.top + u.bbox.height){
+        ctx.save(); ctx.strokeStyle = C.ink2; ctx.setLineDash([6,4]); ctx.lineWidth = 1.5*devicePixelRatio;
+        ctx.beginPath(); ctx.moveTo(u.bbox.left, y); ctx.lineTo(u.bbox.left + u.bbox.width, y); ctx.stroke();
+        ctx.fillStyle = C.ink2; ctx.font = `${11*devicePixelRatio}px system-ui`;
+        ctx.fillText('price to beat', u.bbox.left + 6*devicePixelRatio, y - 5*devicePixelRatio); ctx.restore();
+      }
+    }
+    if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+    ctx.save(); ctx.strokeStyle = C.muted; ctx.setLineDash([3,4]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top + u.bbox.height); ctx.stroke();
+    ctx.fillStyle = C.ink2; ctx.font = `${11*devicePixelRatio}px system-ui`; ctx.fillText('settlement minute', x + 6, u.bbox.top + 14*devicePixelRatio);
+    ctx.restore();
+  }}};
+}
+const width = el => el.clientWidth;
+const sig3 = v => v==null ? '—' : '$' + (Math.abs(v) >= 100 ? Math.round(v).toLocaleString('en-US') : Number(v.toPrecision(3)).toString());   // 3 significant figures
+
+const winRange = (u, min, max) => (S && S.market) ? [S.market.open_ts, S.market.close_ts] : [min, max];
+const priceChart = new uPlot({
+  width: width($('cPrice')), height: 280, cursor:{points:{size:7}}, legend:{show:false},
+  scales:{x:{time:true, range:winRange}, y:{range:(u,min,max)=>{
+    const k = S && S.market ? S.market.strike : null;
+    if (k!=null){ min=Math.min(min,k); max=Math.max(max,k); }
+    const pad = Math.max(5,(max-min)*0.08); return [min-pad, max+pad]; }}},
+  axes: priceAxis(),
+  series:[{},
+    {label:'Est. settle', stroke:C.s2, width:2},
+    {label:'+1σ', stroke:'transparent', width:0, points:{show:false}},
+    {label:'−1σ', stroke:'transparent', width:0, points:{show:false}},
+    {label:'Running avg', stroke:C.s3, width:2},
+    {label:'Proxy', stroke:C.s1, width:2},
+  ],
+  bands:[{series:[2,3], fill:'rgba(217,89,38,.14)'}],
+  plugins:[tooltipPlugin([['Proxy',5,v=>fmtUsd(v)],['Est. settle',1,v=>fmtUsd(v)],['Running avg',4,v=>fmtUsd(v)]]), settleMarker(true)],
+}, [[],[],[],[],[],[]], $('cPrice'));
+
+const probChart = new uPlot({
+  width: width($('cProb')), height: 240, cursor:{points:{size:7}}, legend:{show:false},
+  scales:{x:{time:true, range:winRange}, y:{range:[0,100]}},
+  axes: axes(v=>v+'¢'),
+  series:[{}, {label:'Model', stroke:C.s1, width:2},
+    {label:'Yes ask', stroke:C.s2, width:1.5}, {label:'Yes bid', stroke:C.s3, width:1.5}],
+  plugins:[tooltipPlugin([['Model fair',1,v=>v.toFixed(1)+'¢'],['Yes ask',2,v=>v.toFixed(1)+'¢'],['Yes bid',3,v=>v.toFixed(1)+'¢']]), settleMarker()],
+}, [[],[],[],[]], $('cProb'));
+
+const hourChart = new uPlot({
+  width: width($('cHour')), height: 180, cursor:{points:{size:6}}, legend:{show:false},
+  scales:{x:{time:true}}, axes: priceAxis(),
+  series:[{}, {label:'Proxy', stroke:C.s1, width:2}],
+  plugins:[tooltipPlugin([['Proxy',1,v=>fmtUsd(v)]])],
+}, [[],[]], $('cHour'));
+
+const learnChart = new uPlot({
+  width: width($('cLearn')), height: 180, cursor:{points:{size:6}}, legend:{show:false},
+  scales:{x:{time:true}}, axes: axes(v=>v.toFixed(3)),
+  series:[{}, {label:'Team', stroke:C.s1, width:2}, {label:'Kalshi', stroke:C.s2, width:2}],
+  plugins:[tooltipPlugin([['Team error',1,v=>v.toFixed(4)],['Kalshi error',2,v=>v.toFixed(4)]])],
+}, [[],[],[]], $('cLearn'));
+
+window.addEventListener('resize', () => {
+  learnChart.setSize({width:width($('cLearn')), height:180});
+  priceChart.setSize({width:width($('cPrice')), height:280});
+  probChart.setSize({width:width($('cProb')), height:240});
+  hourChart.setSize({width:width($('cHour')), height:180});
+});
+
+function drawCharts(s){
+  const sr = s.series, m = s.market;
+  if (sr && sr.t.length && m){
+    priceChart.setData([sr.t, sr.mean, sr.hi, sr.lo, sr.run, sr.spot]);
+    probChart.setData([sr.t, sr.p, sr.ya, sr.yb]);
+  }
+  if (s.hour && s.hour.length) hourChart.setData([s.hour.map(r=>r[0]), s.hour.map(r=>r[1])]);
+}
+
+// ---------- panels ----------
+function setTxt(id, v, cls){ const el=$(id); el.textContent=v; if (cls!==undefined) el.className = el.className.replace(/\b(up|down)\b/g,'').trim() + (cls?' '+cls:''); }
+
+let ASSET = (() => { try { return localStorage.getItem('c15asset') || 'BTC'; } catch(e){ return 'BTC'; } })();
+function renderAssetBits(s){
+  DEC = s.decimals ?? 2;
+  document.querySelectorAll('.assetName').forEach(el => el.textContent = s.asset);
+  $('assetName').textContent = s.asset;
+  document.querySelectorAll('.idxName').forEach(el => el.textContent = s.index_name);
+  document.title = `${s.asset} 15m Monitor`;
+  $('histLink').href = `/history?asset=${s.asset}`;
+  const tabs = $('assetTabs');
+  if (tabs.dataset.list !== (s.assets||[]).join()){
+    tabs.dataset.list = (s.assets||[]).join();
+    tabs.innerHTML = (s.assets||[]).map(a => `<button type="button" role="tab" data-asset="${a}">${a}</button>`).join('');
+  }
+  tabs.querySelectorAll('button').forEach(b => { b.classList.toggle('on', b.dataset.asset === s.asset); b.setAttribute('aria-selected', b.dataset.asset === s.asset); });
+  $('overview').innerHTML = (s.overview||[]).map(o => {
+    const t = o.secs_left!=null ? `${String(Math.floor(Math.max(0,o.secs_left)/60)).padStart(2,'0')}:${String(Math.floor(Math.max(0,o.secs_left)%60)).padStart(2,'0')}` : '--:--';
+    const st = o.proven ? '<span class="up">trading</span>' : o.learned < o.need ? `learning ${o.learned}/${o.need}` : 'watching';
+    return `<div class="ov ${o.asset===s.asset?'on':''}" data-asset="${o.asset}"><b>${o.asset}</b><span class="num">${t}</span>
+      <span>team ${o.p_team!=null?pct(o.p_team):'—'} vs Kalshi ${o.mid!=null?pct(o.mid):'—'}</span><span>${st}</span>
+      <span class="num ${o.pnl>=0?'up':'down'}">${o.trades?fmtSigned(o.pnl,2):''}</span></div>`; }).join('');
+}
+
+function render(s){
+  if (s.asset && s.asset !== ASSET) return;     // a late message from the coin we just left
+  S = s;
+  renderAssetBits(s);
+  $('demo').hidden = !s.demo;
+  const m = s.market, md = s.model || {}, sg = s.signal || {};
+  setTxt('ticker', m ? m.ticker : 'no open market');
+
+  // countdown
+  const secs = md.secs_left;
+  if (secs != null){ const t=Math.max(0,Math.floor(secs)); $('countdown').textContent = `${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`;
+    $('countdown').classList.toggle('hot', t <= 120); }
+
+  // tiles
+  setTxt('tSpot', fmtUsd(md.spot));
+  setTxt('tSpotSub', md.dist!=null ? `${fmtSigned(md.dist)} vs price to beat` : '—', md.dist==null?'':(md.dist>=0?'up':'down'));
+  setTxt('tStrike', fmtUsd(m && m.strike));
+  setTxt('tStrikeSub', m ? (m.strike_is_proxy ? 'from our proxy (Kalshi not published yet)' : 'Kalshi published') : '—');
+  if (md.in_settle){
+    setTxt('tSettle', fmtUsd(md.settle_mean));
+    setTxt('tSettleSub', `${md.samples_in}/60 prints in · flip needs ${fmtSigned(md.move_needed)}`);
+  } else {
+    setTxt('tSettle', fmtUsd(md.settle_mean));
+    setTxt('tSettleSub', md.settle_sd ? `±${sig3(md.settle_sd)} (1σ) at close` : '—');
+  }
+  const mid = (m && m.yes_bid!=null && m.yes_ask!=null) ? (m.yes_bid+m.yes_ask)/2 : null;
+  setTxt('tProb', md.p_up!=null ? pct(md.p_up) : '—');
+  setTxt('tProbSub', mid!=null ? `Kalshi mid ${c(mid)} · gap ${cs(md.p_up!=null? md.p_up-mid : null)}` : 'no Kalshi quote');
+  setTxt('tVol', md.sigma ? `${sig3(md.sigma)}/s` : '—');
+  setTxt('tVolSub', md.sigma ? `≈ ${sig3(md.sigma*Math.sqrt(900))} per 15 min · ×${s.config.vol_mult} in model` : 'collecting…');
+
+  // signal
+  const a = $('action'); a.className = 'action' + (sg.side ? ' buy-'+sg.side : '');
+  $('actionBig').textContent = sg.action || 'WAIT';
+  $('actionIcon').textContent = sg.side==='up' ? '▲ edge on Up' : sg.side==='down' ? '▼ edge on Down' : '○ no qualifying edge';
+  const fill = (p, side) => {
+    const d = (sg[side]||{});
+    setTxt(p+'Fair', c(d.prob)); setTxt(p+'Ask', c(d.ask)); setTxt(p+'Fee', c(d.fee));
+    setTxt(p+'Ev', cs(d.ev), d.ev==null?'':(d.ev>0?'up':'down')); setTxt(p+'Lim', d.limit ? 'bid '+c(d.limit) : '—');
+  };
+  fill('u','up'); fill('d','down');
+  $('reasons').innerHTML = (sg.reasons||[]).map(r=>`<li>${r}</li>`).join('') || (sg.side ? '<li>All entry rules pass.</li>' : '');
+  $('sigNote').textContent = sg.note || '';
+
+  // book
+  $('book').innerHTML = m ? [
+    ['Yes bid / ask', `${c(m.yes_bid)} / ${c(m.yes_ask)}`],
+    ['No bid / ask', `${c(m.no_bid)} / ${c(m.no_ask)}`],
+    ['Spread', m.yes_ask!=null&&m.yes_bid!=null ? c(m.yes_ask-m.yes_bid) : '—'],
+    ['Size at bid / ask', `${m.yes_bid_size!=null?Math.round(m.yes_bid_size).toLocaleString():'—'} / ${m.yes_ask_size!=null?Math.round(m.yes_ask_size).toLocaleString():'—'}`],
+    ['Last', c(m.last)], ['Volume', m.volume!=null ? Math.round(m.volume).toLocaleString() : '—'],
+    ['Window', `${hhmm(m.open_ts*1000)} – ${hhmm(m.close_ts*1000)}`],
+    ['Quote age', s.market_age!=null ? s.market_age.toFixed(1)+'s' : '—'],
+  ].map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('') : '';
+  $('marketErr').textContent = s.market_err || '';
+
+  // feeds
+  $('feedBody').innerHTML = s.feeds.map(f => {
+    const st = f.used ? 'on' : (f.connected ? '' : 'off');
+    const title = f.error ? ` title="${f.error.replace(/"/g,'&quot;')}"` : '';
+    return `<tr${title}><td style="font-family:var(--sans)"><span class="dot ${st}"></span>${f.name}${f.used?'':' <span class="muted">(not used)</span>'}</td>
+      <td>${fmtUsd(f.mid)}</td><td>${f.dev==null?'—':fmtSigned(f.dev)}</td><td>${f.age==null?'—':f.age+'s'}</td></tr>`;
+  }).join('') + (s.perp ? (() => { const pr = s.perp, on = pr.mid!=null && pr.age!=null && pr.age < 15;
+      const title = pr.error ? ` title="${pr.error.replace(/"/g,'&quot;')}"` : '';
+      return `<tr${title}><td style="font-family:var(--sans)"><span class="dot ${on?'on':(pr.connected?'':'off')}"></span>Kraken perp <span class="muted">(futures)</span></td>
+        <td>${fmtUsd(pr.mid)}</td><td>${pr.dev==null?'—':fmtSigned(pr.dev)}</td><td>${pr.age==null?'—':pr.age+'s'}</td></tr>`; })() : '');
+  const fl = s.flow || {}, pr = s.perp || {};
+  const sgn = v => v==null ? '—' : `${v>=0?'+':'−'}${Math.abs(v*100).toFixed(0)}%`;
+  $('flowLine').innerHTML = `Taker flow 15s / 1m / 5m: <b class="num">${sgn(fl.tfi15)} / ${sgn(fl.tfi60)} / ${sgn(fl.tfi300)}</b> (positive = buyers)<br>
+    Order book (Kraken top 10): <b class="num">${sgn(fl.book)}</b> bids vs asks · trades/min <b class="num">${fl.trades_per_min ?? '—'}</b><br>
+    Futures premium <b class="num">${pr.premium!=null ? (pr.premium>=0?'+':'')+pr.premium.toFixed(3)+'%' : '—'}</b> · funding <b class="num">${pr.funding!=null ? (pr.funding*100).toFixed(4)+'%' : '—'}</b>`;
+
+  // calibration
+  const cb = s.calibration || {};
+  $('calib').innerHTML = [
+    ['Offset applied', s.config.use_calibration ? fmtSigned(cb.offset) : 'off'],
+    ['Comparison points', cb.n || 0],
+    ['Typical tracking error', cb.mae!=null ? fmtUsd(cb.mae) : 'needs settled windows'],
+    ['Windows waiting to settle', s.pending],
+  ].map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('');
+
+  // windows
+  if (s.windows && s.windows.length){
+    $('winBody').innerHTML = s.windows.map(w => {
+      const err = (w.settle_value!=null && w.our_close_avg!=null) ? w.settle_value - (w.our_close_avg + (cb.offset||0)) : null;
+      const res = w.result ? `<span class="badge ${w.result}">${w.result==='yes'?'UP':'DOWN'}</span>` : '—';
+      const miss = w.our_result && w.result && w.our_result!==w.result ? ' <span class="muted" title="proxy disagreed with Kalshi">≠</span>' : '';
+      return `<tr><td>${hhmm(w.close)}</td><td style="font-family:var(--sans)">${res}${miss}</td><td>${fmtUsd(w.strike)}</td><td>${fmtUsd(w.settle_value)}</td>
+        <td>${fmtUsd(w.our_close_avg)}</td><td>${fmtSigned(err)}</td><td>${w.model_p_final!=null?pct(w.model_p_final):'—'}</td></tr>`;
+    }).join('');
+  }
+
+  // paper
+  const pp = s.paper;
+  $('paperStats').innerHTML = [
+    ['Closed trades', pp.trades], ['Realized P&L', `<span class="${pp.pnl>=0?'up':'down'}">${moneyS(pp.pnl)}</span>`],
+    ['Win rate', pp.win_rate!=null ? pct(pp.win_rate) : '—'], ['Model-expected P&L', moneyS(pp.expected)],
+    ['Fees paid', money(pp.fees)], ['Open mark-to-bid', moneyS(pp.open_mtm)],
+  ].map(([k,v])=>`<span>${k}</span><span>${v}</span>`).join('');
+  const exits = Object.fromEntries((sg.exits||[]).map(e=>[e.id,e]));
+  $('openPos').innerHTML = pp.open.length ? '<table><thead><tr><th>Open</th><th>Entry</th><th>Fair</th><th>Advice</th><th></th></tr></thead><tbody>' +
+    pp.open.map(p => { const e = exits[p.id]||{}; const live = m && m.ticker===p.ticker;
+      return `<tr><td style="font-family:var(--sans)">${p.side==='up'?'▲ Up':'▼ Down'} ×${p.contracts}${p.source==='team'?' <span class="muted">team</span>':''}</td><td>${c(p.entry_price)}</td><td>${live?c(e.fair):'—'}</td>
+      <td style="font-family:var(--sans);font-size:12px">${live?(e.advice||''):'awaiting settlement'}${live&&e.take_profit_limit?`<br><span class="muted">TP limit ${c(e.take_profit_limit)}</span>`:''}</td>
+      <td>${live?`<button class="btn small" data-sell="${p.id}">Sell</button>`:''}</td></tr>`; }).join('') + '</tbody></table>'
+    : '<div class="muted" style="font-size:13px">No open paper positions.</div>';
+  $('histBody').innerHTML = pp.recent.map(p => `<tr><td>${p.ticker.split('-').slice(-2).join('-')}</td><td style="font-family:var(--sans)">${p.side==='up'?'▲':'▼'} ×${p.contracts}</td>
+    <td>${c(p.entry_price)}</td><td>${p.exit==='settled'?(p.exit_price?'won':'lost'):p.exit+' '+c(p.exit_price)}</td><td class="${p.pnl>=0?'up':'down'}">${moneyS(p.pnl)}</td></tr>`).join('')
+    || '<tr><td colspan="5" class="muted" style="font-family:var(--sans)">No closed trades yet.</td></tr>';
+
+  renderTeam(s);
+  renderAlerts(s.alerts);
+  fillConfig(s.config);
+  drawCharts(s);
+}
+
+function renderTeam(s){
+  const T = s.team; if (!T) return;
+  const live = T.live || {}, d = T.decision || {}, b = T.book || {}, cfg = s.config;
+  const st = $('teamStatus');
+  if (T.proven && !cfg.require_proof){ st.className='status wait'; st.textContent = '! Trading allowed: proof check is off'; }
+  else if (T.proven){ st.className='status ok'; st.textContent = '✓ Beating Kalshi: trading allowed'; }
+  else if (T.windows_learned < cfg.min_learned_windows){ st.className='status wait'; st.textContent = `◔ Learning ${T.windows_learned}/${cfg.min_learned_windows} windows`; }
+  else { st.className='status no'; st.textContent = '○ Not yet beating Kalshi: watching only'; }
+  st.title = T.proven_why || '';
+  setTxt('tmP', live.p_team!=null ? pct(live.p_team) : '—');
+  setTxt('tmPsub', live.p_team!=null ? `Kalshi mid ${c(live.mid)} · ${live.phase||''} phase` : 'waiting for data');
+  if (d.action === 'BUY'){ setTxt('tmAct', `BUY ${d.side==='up'?'▲ UP':'▼ DOWN'} ×${d.contracts}`, d.side==='up'?'up':'down'); setTxt('tmActSub', `edge ${cs(d.ev)} · Kelly ${pct(d.kelly)} · $${(d.stake||0).toFixed(2)}`); }
+  else if (d.action === 'SELL'){ setTxt('tmAct', 'SELL', ''); setTxt('tmActSub', d.why||''); }
+  else { setTxt('tmAct', 'WAIT', ''); setTxt('tmActSub', (d.reasons||[])[0] || '—'); }
+  $('tmActSub').title = (d.reasons||[]).join(' · ');
+  const eq = b.equity, pnl = b.realized || 0;
+  setTxt('tmEq', money(eq)); 
+  setTxt('tmEqSub', `${moneyS(pnl)} · ${b.trades||0} trades · ${b.trades?pct(b.wins/b.trades):'—'} won · today ${moneyS(b.today_pnl)}`, pnl>=0?'up':'down');
+  setTxt('tmLearn', `${T.windows_learned} windows`);
+  const te = T.team.edge_vs_market;
+  setTxt('tmLearnSub', te!=null ? `team vs Kalshi: ${te>=0?'+':''}${te.toFixed(4)} (${te>=0?'better':'worse'})` : 'comparing with Kalshi…');
+  const maxInf = Math.max(0.01, ...T.agents.map(a=>a.influence||0));
+  const num = (v,dg=4) => v==null ? '—' : (v>=0?'+':'−')+Math.abs(v).toFixed(dg);
+  const status = a => a.status==='active' ? '<span class="chip st-active">Active</span>'
+    : `<span class="chip st-prob" title="Scored on ${a.va_recent_n} of ${a.probation_need} forecasts needed for review">Probation ${Math.min(100, Math.round(a.va_recent_n/a.probation_need*100))}%</span>`;
+  const row = a => `<tr><td class="agname"><b>${a.name}</b><span>${a.category}</span></td>
+    <td>${status(a)}</td>
+    <td>${a.p_now!=null?pct(a.p_now):'—'}</td>
+    <td style="white-space:nowrap">${a.status==='active' ? `<i class="bar" style="width:${Math.round((a.influence||0)/maxInf*48)}px"></i>${a.influence!=null?pct(a.influence,0):'—'}` : '<span class="muted">no say yet</span>'}</td>
+    <td class="${a.value_added==null?'':a.value_added>0.0005?'up':a.value_added<-0.0005?'down':''}">${num(a.value_added)}</td>
+    <td class="${a.edge_vs_market==null?'':a.edge_vs_market>0?'up':'down'}">${num(a.edge_vs_market)}</td>
+    <td>${a.hit_rate!=null?pct(a.hit_rate):'—'}</td>
+    <td class="${a.solo.pnl>=0?'up':'down'}">${a.solo.trades?moneyS(a.solo.pnl)+` <span class="muted">(${a.solo.trades})</span>`:'—'}</td>
+    <td>${(a.lessons||0).toLocaleString()}</td></tr>`;
+  $('agBody').innerHTML = T.agents.map(a => row(a).replace('<tr>', `<tr title="${a.blurb.replace(/"/g,'&quot;')}">`)).join('')
+    + `<tr style="border-top:2px solid var(--axis)"><td class="agname"><b>Team (coordinator)</b><span>combined forecast · ${T.active} active agents</span></td><td></td><td>${live.p_team!=null?pct(live.p_team):'—'}</td><td>—</td><td>—</td>
+       <td class="${te==null?'':te>0?'up':'down'}">${num(te)}</td><td>${T.team.hit_rate!=null?pct(T.team.hit_rate):'—'}</td>
+       <td class="${T.team.solo.pnl>=0?'up':'down'}">${T.team.solo.trades?moneyS(T.team.solo.pnl)+` <span class="muted">(${T.team.solo.trades})</span>`:'—'}</td><td>${(T.team.n||0).toLocaleString()}</td></tr>
+     <tr><td class="agname"><b>Kalshi price</b><span>benchmark to beat</span></td><td></td><td>${live.mid!=null?pct(live.mid):'—'}</td><td>—</td><td>—</td><td>0</td><td>${T.market.hit_rate!=null?pct(T.market.hit_rate):'—'}</td><td>—</td><td>${(T.market.n||0).toLocaleString()}</td></tr>`;
+  // learning curve: rolling 30-window average
+  const cv = T.curve || [], xs = [], ta = [], ma = [];
+  for (let i = 0; i < cv.length; i++){
+    const w = cv.slice(Math.max(0, i-29), i+1), mk = w.filter(r=>r[2]!=null);
+    xs.push(cv[i][0]); ta.push(w.reduce((a,r)=>a+r[1],0)/w.length); ma.push(mk.length ? mk.reduce((a,r)=>a+r[2],0)/mk.length : null);
+  }
+  learnChart.setData([xs, ta, ma]);
+  $('tmLog').innerHTML = (T.log||[]).map(l => l.event
+      ? `<li>${new Date(l.t*1000).toLocaleTimeString()} · <b class="${l.event==='promoted'?'up':'down'}">${l.agent} ${l.event}</b>: ${l.detail}</li>`
+      : `<li>${new Date(l.t*1000).toLocaleTimeString()} · window settled <b>${l.result}</b> (team had ${pct(l.team_p)} Up) · ${l.lessons} lessons · most helpful so far: ${l.top}</li>`).join('') || '<li>No settled windows yet.</li>';
+}
+
+// ---------- alerts ----------
+function renderAlerts(A){
+  if (!A) return;
+  const ago = t => { const m = Math.round((Date.now()/1000 - t)/60); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m/60)} h ago`; };
+  $('alertKv').innerHTML = [
+    ['Channels', A.channels.length ? A.channels.join(', ') : '<span class="muted">none set up</span>'],
+    ['Heartbeat', A.healthcheck ? (A.last_ping ? (A.last_ping.status===200 ? `✓ ${ago(A.last_ping.t)}` : `✕ ${A.last_ping.error||A.last_ping.status}`) : 'waiting') : '<span class="muted">off</span>'],
+    ['Daily summary', A.summary_time ? `${A.summary_time} ET` : 'off'],
+  ].map(([k,v]) => `<span>${k}</span><span>${v}</span>`).join('');
+  $('testAlert').disabled = !A.channels.length;
+  $('alertLog').innerHTML = (A.recent||[]).map(r => `<li>${new Date(r.t*1000).toLocaleString()} · ${r.text.replace(/</g,'&lt;').replace(/\n/g,'<br>')}</li>`).join('')
+    + (A.errors||[]).map(e => `<li class="down">${new Date(e.t*1000).toLocaleTimeString()} · ${e.channel} failed: ${e.error.replace(/</g,'&lt;')}</li>`).join('')
+    || '<li>Nothing sent yet.</li>';
+}
+$('testAlert').addEventListener('click', async () => {
+  $('alertMsg').textContent = 'Sending…';
+  const r = await fetch('/api/test-alert', {method:'POST'}); const j = await r.json();
+  $('alertMsg').textContent = r.ok && j.ok ? `Sent via ${j.channels.join(', ')}. Check your phone.` : `Problem: ${j.error || (j.errors||[]).map(e=>e.channel+': '+e.error).join('; ')}`;
+});
+
+// ---------- config ----------
+let cfgLoaded = false;
+function fillConfig(cfg){
+  if (cfgLoaded) return; cfgLoaded = true;
+  for (const [k,v] of Object.entries(cfg)){ const el=$(k); if (!el) continue;
+    el.value = el.dataset.scale ? +(v*el.dataset.scale).toFixed(2) : String(v); }
+}
+$('cfg').addEventListener('submit', async e => {
+  e.preventDefault(); const body = {};
+  for (const el of $('cfg').querySelectorAll('input,select')){
+    body[el.id] = el.dataset.scale ? Number(el.value)/Number(el.dataset.scale) : (el.type==='number' ? Number(el.value) : el.value);
+  }
+  const r = await fetch(`/api/config?asset=${ASSET}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('cfgMsg').textContent = r.ok ? 'Saved.' : 'Could not save: ' + (await r.json()).error;
+});
+
+// ---------- paper trading ----------
+async function paper(body){
+  $('tradeErr').textContent = '';
+  const r = await fetch(`/api/paper?asset=${ASSET}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if (!r.ok) $('tradeErr').textContent = (await r.json()).error;
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-buy]'); if (b) paper({action:'buy', side:b.dataset.buy});
+  const s = e.target.closest('[data-sell]'); if (s) paper({action:'sell', id:s.dataset.sell});
+});
+$('resetPaper').addEventListener('click', () => { if (confirm('Clear all paper trades?')) paper({action:'reset'}); });
+
+// ---------- live connection ----------
+let WS = null;
+function connect(){
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?asset=${ASSET}`);   // wss when served over https (e.g. Codespaces)
+  WS = ws;
+  ws.onopen = () => { $('conn').className='dot on'; $('connTxt').textContent='live'; };
+  ws.onclose = () => { if (WS !== ws) return; $('conn').className='dot off'; $('connTxt').textContent='reconnecting'; setTimeout(connect, 1500); };
+  ws.onmessage = ev => { try { render(JSON.parse(ev.data)); } catch(err){ console.error(err); } };
+}
+function switchAsset(a){
+  if (!a || a === ASSET) return;
+  ASSET = a; try { localStorage.setItem('c15asset', a); } catch(e){}
+  cfgLoaded = false;
+  [priceChart, probChart, hourChart, learnChart].forEach(ch => ch.setData(ch.data.map(() => [])));
+  $('winBody').innerHTML = '<tr><td colspan="7" class="muted" style="font-family:var(--sans)">Windows appear here as they settle.</td></tr>';
+  const old = WS; WS = null; if (old) old.close();
+  connect();
+}
+document.addEventListener('click', e => { const t = e.target.closest('[data-asset]'); if (t) switchAsset(t.dataset.asset); });
+connect();
+</script>
+</body>
+</html>
