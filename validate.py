@@ -312,22 +312,46 @@ def out_of_sample(rows, tz):
         out.append(check("Kalshi price edge holds out of sample?", "INFO",
                          "needs Kalshi's price history: run python history.py --candles (or --candles-days 30) first"))
     else:
-        tested = kept = 0
-        lines = []
+        # A level only counts if its profit is clear of its own error band (2 standard errors), first in the
+        # first half and then again in the second. Small paper profits inside the band are reported as noise.
+        def stat(vals):
+            m = statistics.mean(vals)
+            return m, (2 * statistics.stdev(vals) / math.sqrt(len(vals)) if len(vals) > 1 else float("inf")), len(vals)
+
+        def fmt(s):
+            return f"{s[0] * 100:+.1f}¢ ±{s[1] * 100:.1f} (n={s[2]})"
+
+        clear, held, noisy, busy = [], [], [], []
         for k in range(10):
             if len(ba.get(k, [])) < 30 or len(bb.get(k, [])) < 30:
                 continue
             for side, idx in (("Yes", 0), ("No", 1)):
-                ea = statistics.mean(v[idx] for v in ba[k])
-                if ea > 0:
-                    tested += 1
-                    eb = statistics.mean(v[idx] for v in bb[k])
-                    kept += eb > 0
-                    lines.append(f"buy {side} at {k * 10}–{k * 10 + 10}¢: {ea * 100:+.1f}¢ → {eb * 100:+.1f}¢")
-        out.append(check("Kalshi price edge holds out of sample?", "PASS" if tested and kept == tested else "INFO",
-                         (f"{kept} of {tested} price levels that were profitable in the first half stayed profitable in the second"
-                          + (f" ({'; '.join(lines[:6])})" if lines else "")) if tested else
-                         "no price level was profitable after fees in the first half"))
+                sa_, sb_ = stat([v[idx] for v in ba[k]]), stat([v[idx] for v in bb[k]])
+                label = f"buy {side} at {k * 10}–{k * 10 + 10}¢"
+                if sa_[0] - sa_[1] > 0:
+                    clear.append(label)
+                    if sb_[0] - sb_[1] > 0:
+                        held.append(f"{label}: {fmt(sa_)} → {fmt(sb_)}")
+                elif sa_[0] > 0:
+                    noisy.append((sa_[0], f"{label}: {fmt(sa_)}"))
+                if k in (0, 9):
+                    busy.append(sb_[0])
+        if held:
+            detail = (f"{len(held)} price level{'s' if len(held) != 1 else ''} beat Kalshi clearly in both halves, "
+                      f"beyond the error band ({'; '.join(held[:4])}). Worth paper trading before believing it.")
+        elif clear:
+            detail = (f"{len(clear)} price level{'s' if len(clear) != 1 else ''} looked clearly profitable in the first half "
+                      f"({', '.join(clear[:4])}) but did not hold up in the second.")
+        else:
+            detail = "No price level was clearly profitable after fees."
+        if noisy:
+            noisy.sort(reverse=True)
+            detail += (f" {len(noisy)} more showed a paper profit that sits inside its error band, so it could just be "
+                       f"luck: {'; '.join(t for _, t in noisy[:3])}.")
+        if busy:
+            detail += (f" Most windows trade under 10¢ or over 90¢; there, recent results ran "
+                       f"{min(busy) * 100:+.1f}¢ to {max(busy) * 100:+.1f}¢ per contract.")
+        out.append(check("Kalshi price edge holds out of sample?", "PASS" if held else "INFO", detail))
 
     # multiple comparisons
     tests = sig = 0

@@ -226,6 +226,25 @@ def download_windows(api):
     return rows, cutoff
 
 
+def repair_strikes(rows):
+    """Kalshi occasionally stores a window's price to beat at the wrong scale (on 2026-04-13 a few BTC, ETH and SOL
+    windows show 7.2437 for $72,437). The price to beat always equals the previous window's settlement, so when the
+    two differ by an exact power of ten, use the previous settlement. Kalshi's Up/Down result is not changed."""
+    fixed = 0
+    for prev, r in zip(rows, rows[1:]):
+        s, p = r.get("strike"), prev.get("settle_value")
+        if not s or not p or s <= 0 or p <= 0 or r["close_ts"] - prev["close_ts"] != WINDOW:
+            continue
+        k = round(math.log10(p / s))
+        if k != 0 and abs(p / s / 10 ** k - 1) < 0.002:
+            r["strike"] = p
+            if r.get("settle_value") is not None:
+                mv = r["settle_value"] - p
+                r["move"], r["move_bps"] = round(mv, 4), round(mv / p * 1e4, 2)
+            fixed += 1
+    return fixed
+
+
 def download_candles(api, rows, cutoff, days=None, fetch=True):
     """1-minute Yes bid/ask at 10/5/2/1 min before close. Cached + resumable."""
     path = os.path.join(OUT, "candles.jsonl")
@@ -388,10 +407,14 @@ def build_summary(rows, tz):
                 continue
             mids = [(r[f"m{mk}_bid"] + r[f"m{mk}_ask"]) / 2 for r in g]
             p = sum(r["_up"] for r in g) / len(g)
-            ev_yes = statistics.mean(r["_up"] - r[f"m{mk}_ask"] - taker_fee(r[f"m{mk}_ask"]) for r in g)
-            ev_no = statistics.mean((1 - r["_up"]) - (1 - r[f"m{mk}_bid"]) - taker_fee(1 - r[f"m{mk}_bid"]) for r in g)
+            pnl_yes = [r["_up"] - r[f"m{mk}_ask"] - taker_fee(r[f"m{mk}_ask"]) for r in g]
+            pnl_no = [(1 - r["_up"]) - (1 - r[f"m{mk}_bid"]) - taker_fee(1 - r[f"m{mk}_bid"]) for r in g]
+            se = (lambda v: statistics.stdev(v) / math.sqrt(len(v)) if len(v) > 1 else None)
             out.append({"bucket": f"{b * 10}–{b * 10 + 10}¢", "n": len(g), "avg_mid": statistics.mean(mids),
-                        "up_rate": p, "ci": ci95(p, len(g)), "ev_buy_yes": ev_yes, "ev_buy_no": ev_no})
+                        "up_rate": p, "ci": ci95(p, len(g)),
+                        "ev_buy_yes": statistics.mean(pnl_yes), "ev_buy_no": statistics.mean(pnl_no),
+                        "ev_ci_yes": 2 * se(pnl_yes) if se(pnl_yes) is not None else None,
+                        "ev_ci_no": 2 * se(pnl_no) if se(pnl_no) is not None else None})
         if out:
             calib[f"{mk}m"] = out
 
@@ -526,6 +549,9 @@ def main():
                 download_candles(api, rows, cutoff, fetch=False)
         print(f"  {api.calls} API calls")
 
+    fixed = repair_strikes(rows)
+    if fixed:
+        print(f"  Repaired {fixed} price-to-beat value{'s' if fixed != 1 else ''} Kalshi stored at the wrong scale")
     summary = build_summary(rows, args.tz)
     write_outputs(rows, summary)
     o = summary["overall"]

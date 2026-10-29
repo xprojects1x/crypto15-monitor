@@ -239,6 +239,7 @@ const usd = (v,d) => { if (v==null) return '—'; let lo = d, hi = d;
   return (v<0?'−':'')+'$'+Math.abs(Number(v)).toLocaleString('en-US',{minimumFractionDigits:lo,maximumFractionDigits:hi}); };
 const int = v => v==null ? '—' : Math.round(v).toLocaleString('en-US');
 const cents = v => v==null ? '—' : (v>=0?'+':'−')+Math.abs(v*100).toFixed(1)+'¢';
+const evCell = (ev, ci) => `<td class="${ev!=null && ci!=null && ev-ci>0 ? 'sig' : ''}">${cents(ev)}${ci!=null ? ` <span class="muted">±${(ci*100).toFixed(1)}</span>` : ''}</td>`;
 const sig = (p,ci) => p!=null && ci!=null && Math.abs(p-0.5) > ci;
 
 // ---------- tiny SVG chart kit (hover tooltips, one y-axis) ----------
@@ -386,7 +387,8 @@ function render(S){
         <div class="chart" id="cCal"></div>
         <table style="margin-top:10px"><thead><tr><th>Kalshi Yes mid</th><th>Windows</th><th>Avg price</th><th>Actually Up</th><th>±95%</th><th>Edge buying Yes</th><th>Edge buying No</th></tr></thead>
         <tbody>${rows.map(r=>`<tr><td>${r.bucket}</td><td>${int(r.n)}</td><td>${(r.avg_mid*100).toFixed(1)}¢</td><td>${pct(r.up_rate)}</td><td>±${pct(r.ci)}</td>
-          <td class="${r.ev_buy_yes>0?'sig':''}">${cents(r.ev_buy_yes)}</td><td class="${r.ev_buy_no>0?'sig':''}">${cents(r.ev_buy_no)}</td></tr>`).join('')}</tbody></table>`;
+          ${evCell(r.ev_buy_yes, r.ev_ci_yes)}${evCell(r.ev_buy_no, r.ev_ci_no)}</tr>`).join('')}</tbody></table>
+        <p class="muted" style="font-size:12px;margin-top:8px">Edge is the average profit per $1 contract after taker fees, ± its 95% range. It's highlighted only when the whole range is above zero; anything else could be luck. Small buckets (under a few hundred windows) need months of prices before they mean much.</p>`;
       barChart($('cCal'), {labels: rows.map(r=>r.bucket), values: rows.map(r=>r.up_rate), colors: rows.map(()=>COL.s1), ci: rows.map(r=>r.ci),
         yFmt: v=>Math.round(v*100)+'%', yMin: 0, yMax: 1, labelEvery: 1,
         tip: i => tipRows(rows[i].bucket, [['Kalshi avg', (rows[i].avg_mid*100).toFixed(1)+'¢'], ['Actually Up', pct(rows[i].up_rate)], ['Windows', int(rows[i].n)]])});
