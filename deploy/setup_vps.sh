@@ -74,6 +74,7 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
 if [ -n "$REPO_URL" ]; then
   if [ -d "$APP_DIR/.git" ]; then
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+    as_app git -C "$APP_DIR" config core.fileMode false     # our chmod +x on scripts isn't a local edit
     as_app git -C "$APP_DIR" pull --ff-only -q && ok "Updated code from $REPO_URL"
   else
     [ -e "$APP_DIR" ] && [ -n "$(ls -A "$APP_DIR" 2>/dev/null)" ] && mv "$APP_DIR" "${APP_DIR}.old.$(date +%s)"
@@ -90,6 +91,9 @@ fi
 [ -f "$APP_DIR/app.py" ] || die "$APP_DIR doesn't contain app.py"
 mkdir -p "$APP_DIR/data" "$APP_DIR/backups"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+# Scripts committed from Windows lose their executable bit; making them executable here must not look like a local
+# edit to git, or later updates refuse to pull.
+[ -d "$APP_DIR/.git" ] && as_app git -C "$APP_DIR" config core.fileMode false
 chmod +x "$APP_DIR"/deploy/*.sh
 
 # ------------------------------------------------------------------ 4. python environment

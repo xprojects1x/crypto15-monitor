@@ -6,6 +6,8 @@ APP_USER=crypto15
 [ "$(id -u)" -eq 0 ] || { echo "Run as root."; exit 1; }
 cd "$APP_DIR"
 if [ -d .git ]; then
+  # chmod +x on the scripts isn't a real edit; don't let it block updates
+  sudo -u "$APP_USER" -H git config core.fileMode false
   sudo -u "$APP_USER" -H git pull --ff-only
 else
   echo "This copy didn't come from GitHub; upload the new files into $APP_DIR, then run this again."
