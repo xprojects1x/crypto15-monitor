@@ -17,6 +17,7 @@ into paper trades (or no trade), and a scorekeeper measures what each agent real
     regime    Events & volatility   probation   confidence near data releases, Fed days, US open, vol spikes
     tech      Chart reading         probation   RSI, Bollinger %B, MACD on 1-minute bars
     options   Options volatility    probation   options-implied volatility (Deribit DVOL) in the settlement model
+    lag       Kalshi lag            probation   how far Kalshi's quotes trail the fair-value model after a move
 
   Probation   New agents forecast, learn and are scored, but have no say in the team forecast. A "shadow"
               coordinator that includes every agent measures what each would add. An agent is promoted when
@@ -398,6 +399,22 @@ class OptionsAgent(Agent):
         return [Li, Lm, Lm * clip(r, 2), 1.0]
 
 
+class LagAgent(Agent):
+    key, name, category = "lag", "Kalshi lag", "Market reaction"
+    blurb = ("How far Kalshi's quotes trail the fair-value model after a move (over 5, 15 and 30 s), and how far the "
+             "index has moved since Kalshi's price last changed; learns whether Kalshi catches up.")
+    init = (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)   # starts as Kalshi's own price; must learn that the lag matters
+    lr = 0.08
+    start_status = "probation"
+
+    def features(self, ctx, council):
+        g = ctx.get("lag")
+        if ctx.get("mid") is None or not g:
+            return None
+        return [clip(logit(ctx["mid"]), 8), clip(g.get("gap") or 0.0, 4)] \
+            + [clip(g.get(h) or 0.0, 3) for h in (5, 15, 30)] + [clip(g.get("stale_move") or 0.0, 4), 1.0]
+
+
 class TechAgent(Agent):
     key, name, category = "tech", "Chart reading", "Technical"
     blurb = "Classic chart indicators on 1-minute bars: RSI(14), Bollinger %B(20), MACD(12,26,9) histogram."
@@ -414,7 +431,7 @@ class TechAgent(Agent):
 
 
 AGENT_CLASSES = (PriceAgent, MomentumAgent, LeadAgent, CrowdAgent, PatternAgent,
-                 FlowAgent, DerivsAgent, CrossAgent, RegimeAgent, TechAgent, OptionsAgent)
+                 FlowAgent, DerivsAgent, CrossAgent, RegimeAgent, TechAgent, OptionsAgent, LagAgent)
 TEAM_INIT = {"price": 0.5, "momentum": 0.2, "lead": 0.1, "crowd": 0.3}
 # the agent order saved files used before agents were recorded by name (so new agents can be added without
 # losing what the coordinators learned)
@@ -767,17 +784,23 @@ class Council:
         kelly = max(0.0, (best["prob"] - price) / (1 - price))
         bank = max(0.0, book["equity"])
         stake = min(cfg["kelly_fraction"] * kelly * bank, cfg["max_bet_pct"] * bank)
+        dd = book.get("drawdown") or 0.0
+        brake = cfg.get("drawdown_brake_pct", 0) > 0 and dd >= cfg["drawdown_brake_pct"]
+        if brake:                          # losing streak: smaller bets until the account recovers
+            stake *= max(0.0, min(1.0, cfg.get("drawdown_brake_factor", 0.5)))
         n = int(stake // price)
         cap = ctx.get("yes_ask_size") if best["side"] == "up" and not limit_orders else None
         if cap:
             n = min(n, int(cap))
         if n < 1:
-            reasons.append("Edge too small for the paper bankroll at this Kelly fraction")
+            reasons.append("Edge too small for the paper bankroll at this Kelly fraction"
+                           + (" (drawdown brake on)" if brake else ""))
             self.decision = act
             return act
         act.update({"action": "BUY", "side": best["side"], "contracts": n, "price": best["price"],
                     "order": "limit" if limit_orders else "market",
-                    "prob": best["prob"], "ev": best["ev"], "kelly": kelly, "stake": n * price})
+                    "prob": best["prob"], "ev": best["ev"], "kelly": kelly, "stake": n * price,
+                    "brake": brake, "drawdown": dd})
         self.decision = act
         return act
 

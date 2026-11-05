@@ -152,6 +152,7 @@ information and keeps learning from every settled window. Memory is saved per co
 | Cross-asset | Other coins | moves in the other two coins this one hasn't matched yet | Probation |
 | Events & volatility | Regime | data-release times, Fed decisions, US open, weekends, volatility spikes (adjusts confidence) | Probation |
 | Chart reading | Technical | RSI(14), Bollinger %B(20), MACD(12,26,9) on 1-minute bars (needs ~36 min of data) | Probation |
+| Kalshi lag | Market reaction | how far Kalshi's quotes trail the fair-value model after a move (over 5, 15 and 30 s), and how far the index has moved since Kalshi's price last changed | Probation |
 | Options volatility | Options market | the settlement model run with Deribit's options-implied volatility (DVOL) instead of recent realized volatility; SOL has no DVOL, so it uses BTC's implied/realized ratio applied to SOL's own volatility | Probation |
 
 * **Probation:** agents on probation forecast, learn and are scored, but have **no say** in the team forecast or trades.
@@ -172,7 +173,9 @@ information and keeps learning from every settled window. Memory is saved per co
   * no high-impact event (like a Fed decision) is within 10 minutes of the window;
   * the daily loss limit hasn't been hit.
 
-  Size is **quarter-Kelly**, capped at 2% of the paper bankroll per window. It also sells early when the bid pays more
+  Size is **quarter-Kelly**, capped at 2% of the paper bankroll per window. A **drawdown brake** halves bet sizes while
+  the team's paper account is more than 8% below its peak (settings: *Drawdown brake at* and *…then bet this share of
+  normal*), with a Discord alert when it engages and when it releases. It also sells early when the bid pays more
   than the team's fair value.
 
 All of these settings are on the dashboard under *Agent team (paper)*, separately for each coin.

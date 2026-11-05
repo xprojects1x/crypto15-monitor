@@ -159,7 +159,7 @@ footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
 
     <section class="card" id="teamCard">
       <div class="chart-head"><h2>Agent team</h2><span id="teamStatus" class="status neutral">—</span></div>
-      <p class="muted" style="font-size:12px;margin:0 0 10px">Eleven specialists forecast every window and learn from every settlement. Active agents shape the team forecast; agents on probation are scored silently until they prove they help. The risk manager paper-trades only after the team clearly beats Kalshi's own prices.</p>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">Twelve specialists forecast every window and learn from every settlement. Active agents shape the team forecast; agents on probation are scored silently until they prove they help. The risk manager paper-trades only after the team clearly beats Kalshi's own prices.</p>
       <div class="team-top">
         <div class="tile"><div class="lab">Team P(Up) now</div><div class="val num" id="tmP">—</div><div class="sub num" id="tmPsub">—</div></div>
         <div class="tile"><div class="lab">Risk manager</div><div class="val" id="tmAct" style="font-size:18px">—</div><div class="sub" id="tmActSub">—</div></div>
@@ -280,6 +280,8 @@ footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
         <label for="kelly_fraction">Kelly fraction</label><input id="kelly_fraction" type="number" step="0.05" min="0" max="1">
         <label for="max_bet_pct">Max bet (% of bankroll)</label><input id="max_bet_pct" data-scale="100" type="number" step="0.5">
         <label for="daily_loss_limit">Daily loss limit ($)</label><input id="daily_loss_limit" type="number" step="10" min="0">
+        <label for="drawdown_brake_pct">Drawdown brake at (% below peak)</label><input id="drawdown_brake_pct" data-scale="100" type="number" step="1" min="0">
+        <label for="drawdown_brake_factor">…then bet this share of normal</label><input id="drawdown_brake_factor" type="number" step="0.05" min="0" max="1">
         <label for="min_learned_windows">Windows to learn before trading</label><input id="min_learned_windows" type="number" step="10" min="0">
         <label for="order_type">Team order type</label><select id="order_type"><option value="taker">buy at the ask (taker)</option><option value="maker">limit order (maker)</option></select>
         <label for="maker_fee_mult">Maker fee multiplier</label><input id="maker_fee_mult" type="number" step="0.25" min="0" title="0 for series not listed in Kalshi's fee schedule">
@@ -594,7 +596,10 @@ function renderTeam(s){
   $('tmActSub').title = (d.reasons||[]).join(' · ');
   const eq = b.equity, pnl = b.realized || 0;
   setTxt('tmEq', money(eq)); 
-  setTxt('tmEqSub', `${moneyS(pnl)} · ${b.trades||0} trades · ${b.trades?pct(b.wins/b.trades):'—'} won · today ${moneyS(b.today_pnl)}`, pnl>=0?'up':'down');
+  const braked = cfg.drawdown_brake_pct > 0 && cfg.drawdown_brake_factor < 1 && (b.drawdown||0) >= cfg.drawdown_brake_pct;
+  setTxt('tmEqSub', `${moneyS(pnl)} · ${b.trades||0} trades · ${b.trades?pct(b.wins/b.trades):'—'} won · today ${moneyS(b.today_pnl)}`
+    + (b.drawdown > 0.0005 ? ` · ${(b.drawdown*100).toFixed(1)}% below peak${braked ? ' · brake on' : ''}` : ''), pnl>=0?'up':'down');
+  $('tmEqSub').title = braked ? `Bets cut to ${Math.round(cfg.drawdown_brake_factor*100)}% of normal until the account is within ${Math.round(cfg.drawdown_brake_pct*100)}% of its peak (${money(b.peak)}).` : '';
   setTxt('tmLearn', `${T.windows_learned} windows`);
   const te = T.team.edge_vs_market;
   setTxt('tmLearnSub', te!=null ? `team vs Kalshi: ${te>=0?'+':''}${te.toFixed(4)} (${te>=0?'better':'worse'})` : 'comparing with Kalshi…');

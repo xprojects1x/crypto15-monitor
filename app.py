@@ -100,6 +100,8 @@ DEFAULT_CONFIG = {
     "kelly_fraction": 0.25,      # fraction of the Kelly stake to use (0.25 = quarter Kelly)
     "max_bet_pct": 0.02,         # never risk more than this share of the bankroll on one window
     "daily_loss_limit": 100.0,   # pause team trading for the rest of the UTC day after this loss
+    "drawdown_brake_pct": 0.08,  # when the team's paper account is this far below its peak...
+    "drawdown_brake_factor": 0.5,  # ...bet only this fraction of the usual size until it recovers (1 = no brake)
     "require_proof": True,       # only trade once the team clearly beats Kalshi's own prices
     "min_learned_windows": 50,   # settled windows of learning before any trade
     "max_entries_per_window": 1,
@@ -520,6 +522,7 @@ class DemoWorld:
                         {"Coinbase": 1.5, "Kraken": -3.0, "Bitstamp": 0.5, "Gemini": -1.0, "Crypto.com": 2.0}.items()}
         self.vol = 3.0 * self.sc
         self.pressure = 0.0
+        self.p_hist = deque(maxlen=12)      # the demo market maker quotes off a model price ~8 s old
 
     def step(self, feeds, flow=None, perp=None):
         sc = self.sc
@@ -583,8 +586,9 @@ class DemoWorld:
         close = start + self.window
         strike = self.avg_before(start) or self.true
         ticker = f"{self.spec['series']}-DEMO-{dt.datetime.fromtimestamp(close).strftime('%y%b%d%H%M%S').upper()}"
-        # crude market maker: plain model price + noise, 2-4c spread
-        fair = model_p if model_p is not None else 0.5
+        # crude market maker: plain model price from a few seconds ago (Kalshi reacts with a lag) + noise, 2-4c spread
+        self.p_hist.append(model_p)
+        fair = self.p_hist[0] if self.p_hist[0] is not None else (model_p if model_p is not None else 0.5)
         mid = min(0.99, max(0.01, fair + random.gauss(0, 0.04)))
         half = random.choice([0.01, 0.01, 0.02])
         yb, ya = max(0.01, round(mid - half, 2)), min(0.99, round(mid + half, 2))
@@ -803,6 +807,36 @@ class Engine:
             if high:
                 out["high_event"] = f"{high[0][1]} at {to_local(high[0][0], 'ET'):%H:%M} ET"
         out["tech"] = self.tech()
+        out["lag"] = self.kalshi_lag(sd)
+        return out
+
+    def kalshi_lag(self, sd):
+        """How far Kalshi's quotes trail the fair-value model: model move minus Kalshi move over 5/15/30 s (log-odds),
+        and how far the index has moved (in settlement standard deviations) since Kalshi's mid last changed."""
+        m = self.market
+        s = self.window_series.get(m["ticker"]) if m else None
+        if not s or len(s["t"]) < 31 or not sd:
+            return None
+
+        def lo(pct):
+            q = min(0.99, max(0.01, pct / 100))
+            return math.log(q / (1 - q))
+        n = len(s["t"])
+        mids = [((b + a) / 2 if b is not None and a is not None else None) for b, a in zip(s["yb"], s["ya"])]
+        if s["p"][-1] is None or mids[-1] is None:
+            return None
+        out = {"gap": lo(s["p"][-1]) - lo(mids[-1])}
+        for h in (5, 15, 30):
+            i = n - 1 - h
+            if s["p"][i] is None or mids[i] is None:
+                out[h] = None
+                continue
+            out[h] = (lo(s["p"][-1]) - lo(s["p"][i])) - (lo(mids[-1]) - lo(mids[i]))
+        k = n - 1                                   # how long has Kalshi's mid sat still?
+        while k > 0 and mids[k - 1] is not None and abs(mids[k - 1] - mids[-1]) < 1e-9:
+            k -= 1
+        out["stale_secs"] = s["t"][-1] - s["t"][k]
+        out["stale_move"] = (s["spot"][-1] - s["spot"][k]) / sd
         return out
 
     def rv_1h(self):
@@ -1197,7 +1231,12 @@ class Engine:
         team_closed = [p for p in self.paper["closed"] if p.get("source") == "team"]
         today = dt.datetime.now(dt.timezone.utc).date().isoformat()
         realized = sum(p["pnl"] for p in team_closed)
+        eq = peak = self.cfg["agent_bankroll"]
+        for p in sorted(team_closed, key=lambda p: p.get("exit_ts", "")):
+            eq += p["pnl"]
+            peak = max(peak, eq)
         return {
+            "peak": peak, "drawdown": (peak - eq) / peak if peak > 0 else 0.0,
             "open": [p for p in team_open if p["ticker"] == tk],
             "entries_this_window": sum(1 for p in team_open + team_closed if p["ticker"] == tk)
                                    + sum(1 for o in self.exec.open_orders(tk, "paper") if not o.get("pos_id")),
@@ -1596,6 +1635,19 @@ class Hub:
             await condition(f"{a}:kalshi", not h["kalshi_ok"], 5,
                             f"⚠ {a}: no fresh Kalshi data for 5+ minutes. {h['kalshi_err'] or ''}".strip(),
                             f"✓ {a}: Kalshi data flowing again")
+            brake = book_dd = None
+            bk = e.team_book()
+            if e.cfg["drawdown_brake_pct"] > 0 and e.cfg["drawdown_brake_factor"] < 1:
+                book_dd = bk["drawdown"]
+                brake = book_dd >= e.cfg["drawdown_brake_pct"]
+                was = w.setdefault("brake", {}).get(a)
+                if brake and not was:
+                    await send(f"🧯 {a}: team paper account is {book_dd * 100:.1f}% below its peak "
+                               f"(${bk['peak']:.2f}). Bet sizes cut to {e.cfg['drawdown_brake_factor'] * 100:.0f}% until it recovers.",
+                               cooldown=0)
+                elif was and not brake:
+                    await send(f"✓ {a}: drawdown back under {e.cfg['drawdown_brake_pct'] * 100:.0f}%. Normal bet sizes again.", cooldown=0)
+                w["brake"][a] = brake
             ok, why = e.council.proven(e.cfg)
             if ok != w["proven"].get(a):
                 if ok:
