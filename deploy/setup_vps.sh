@@ -177,8 +177,14 @@ except Exception:
   echo "   Optional dead-man's switch: a free https://healthchecks.io check (Period 5 min, Grace 5 min) texts or emails"
   echo "   you if this server goes silent, even if it's completely down."
   HC_URL="$(ask "Paste its ping URL, or press Enter to skip:")"
-  SUMMARY="$(ask "Daily summary time, US Eastern [20:00] (or 'off'):")"; SUMMARY="${SUMMARY:-20:00}"
-  [ "$SUMMARY" = off ] && SUMMARY=""
+  while true; do
+    SUMMARY="$(ask "Daily summary time, US Eastern, 24-hour like 20:00 for 8 pm [20:00] (or 'off'):")"
+    SUMMARY="${SUMMARY:-20:00}"
+    [ "$SUMMARY" = off ] && { SUMMARY=""; break; }
+    SUMMARY="$("$APP_DIR/.venv/bin/python" -c 'import sys; sys.path.insert(0, sys.argv[1]); from alerts import parse_clock; print(parse_clock(sys.argv[2]))' "$APP_DIR" "$SUMMARY" 2>/dev/null)"
+    [ -n "$SUMMARY" ] && { ok "Daily summary at $SUMMARY Eastern"; break; }
+    warn "Please type a time like 20:00 (8 pm) or 'off'."
+  done
   TRADES="0"; yes_no "Also message you about every team paper trade? (can be many per day)" n && TRADES="1"
   umask 077
   cat > "$ENV_FILE" <<EOF

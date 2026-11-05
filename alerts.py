@@ -41,6 +41,21 @@ def load_env_file(path):
         pass
 
 
+def parse_clock(text):
+    """'20:00', '8pm', '8 pm Eastern', '8:30 PM', '0830' -> 'HH:MM' (24-hour); '' or 'off' or unreadable -> ''."""
+    import re
+    t = (text or "").strip().lower()
+    m = re.match(r"^(\d{1,2})(?::?(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", t)
+    if not m or t in ("off", "no", "0"):
+        return ""
+    h, mi, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").replace(".", "")
+    if ap:
+        if not 1 <= h <= 12:
+            return ""
+        h = h % 12 + (12 if ap == "pm" else 0)
+    return f"{h:02d}:{mi:02d}" if h < 24 and mi < 60 else ""
+
+
 class Alerter:
     def __init__(self):
         e = os.environ.get
@@ -49,7 +64,11 @@ class Alerter:
         self.smtp = {"host": e("SMTP_HOST", ""), "port": int(e("SMTP_PORT", "587") or 587), "user": e("SMTP_USER", ""),
                      "password": e("SMTP_PASSWORD", ""), "to": e("ALERT_EMAIL_TO", ""), "from": e("ALERT_EMAIL_FROM", "")}
         self.healthcheck = e("HEALTHCHECK_URL", "")
-        self.summary_time = e("DAILY_SUMMARY_ET", "20:00").strip()
+        raw = e("DAILY_SUMMARY_ET", "20:00").strip()
+        self.summary_time = parse_clock(raw)
+        if raw and raw.lower() not in ("off", "no", "0") and not self.summary_time:
+            print(f"DAILY_SUMMARY_ET={raw!r} isn't a time I understand (use e.g. 20:00); using 20:00", flush=True)
+            self.summary_time = "20:00"
         self.alert_trades = e("ALERT_TRADES", "0").strip() in ("1", "true", "yes")
         self.tg_api = e("TELEGRAM_API_BASE", "https://api.telegram.org")       # overridable for testing
         self.session = None
