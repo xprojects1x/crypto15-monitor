@@ -13,7 +13,9 @@ What it does, for each coin
     published price to beat and settlement values.
   * Polls Kalshi's public market data for the live window (KXBTC15M, KXETH15M, KXSOL15M).
   * Models the 60-second settlement average and prices a fair P(Up).
+  * Reads options-implied volatility (Deribit DVOL for BTC and ETH) for the options agent.
   * Runs a team of learning agents (agents.py) that paper-trade only once they clearly beat Kalshi.
+  * Tests limit ("maker") orders against buying at the ask on every window (execution.py).
   * Logs every second to CSV (compressed daily, old days pruned) for backtesting.
 
 It never places real orders and never needs your Kalshi keys.
@@ -49,6 +51,7 @@ from aiohttp import web
 
 from agents import Council, Events, build_ctx
 from alerts import Alerter, load_env_file
+from execution import ExecSim, parse_trade
 from history import to_local
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +78,9 @@ FEED_STALE_SEC = 10          # a feed older than this is ignored
 OUTLIER_PCT = 0.005          # a feed >0.5% away from the others is ignored
 SETTLE_SAMPLES = 60          # Kalshi averages 60 one-second index prints
 WINDOW_SEC = 900             # 15 minutes (shortened in demo mode if asked)
+SEC_PER_YEAR = 365 * 24 * 3600
+DERIBIT_URL = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
+DVOL_CURRENCIES = {"BTC": "BTC", "ETH": "ETH"}       # Deribit publishes DVOL for these; SOL borrows BTC's
 
 DEFAULT_CONFIG = {
     "composite": "median",       # median | mean of exchange mids
@@ -101,6 +107,8 @@ DEFAULT_CONFIG = {
     "event_buffer_min": 10,      # ...this many minutes either side
     "probation_windows": 200,    # windows a new agent is scored before it can be promoted
     "keep_days": 90,             # days of per-second tick logs to keep (older ones are deleted)
+    "order_type": "taker",       # team paper trades: "taker" buys at the ask; "maker" rests a limit order
+    "maker_fee_mult": 0.0,       # Kalshi maker-fee multiplier for this series (0 unless its fee schedule lists one)
 }
 
 
@@ -449,6 +457,47 @@ def kraken_futures_task(session, perp):
     return run_ws(session, perp, "wss://futures.kraken.com/ws/v1", on_open, on_msg)
 
 
+class OptionsVol:
+    """Deribit's DVOL: 30-day options-implied volatility, annualized %, for BTC and ETH (polled once a minute)."""
+
+    def __init__(self):
+        self.vol = {}                      # currency -> (annual %, ts)
+        self.connected = False
+        self.error = ""
+        self.ts = 0.0
+
+    def get(self, cur, max_age=900):
+        v = self.vol.get(cur)
+        return v[0] if v and now() - v[1] < max_age else None
+
+    def set(self, cur, val):
+        self.vol[cur] = (val, now())
+        self.ts = now()
+
+
+async def deribit_loop(session, ov, every=60):
+    while True:
+        for cur in sorted(set(DVOL_CURRENCIES.values())):
+            try:
+                end = int(now() * 1000)
+                params = {"currency": cur, "start_timestamp": end - 15 * 60 * 1000, "end_timestamp": end, "resolution": "60"}
+                async with session.get(DERIBIT_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                    if r.status != 200:
+                        raise RuntimeError(f"HTTP {r.status}")
+                    data = ((await r.json()).get("result") or {}).get("data") or []
+                if not data:
+                    raise RuntimeError("no data returned")
+                last = max(data, key=lambda row: row[0])
+                ov.set(cur, float(last[4]))
+                ov.connected, ov.error = True, ""
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                ov.connected = False
+                ov.error = f"Deribit {cur}: {e}"[:160] or "Deribit unavailable"
+        await asyncio.sleep(every)
+
+
 # ---------------------------------------------------------------------------
 # Demo simulator (no internet): fake exchanges + fake Kalshi market
 # ---------------------------------------------------------------------------
@@ -506,6 +555,23 @@ class DemoWorld:
             perp.connected = True
             perp.update({"bid": self.perp_px - sc, "ask": self.perp_px + sc, "last": self.perp_px,
                          "premium": prem, "relative_funding_rate": 0.00001})
+
+    def implied_annual(self):
+        """Demo options market: knows the current volatility regime (with some noise), unlike a lagging realized estimate."""
+        return self.vol / max(self.true, 1e-9) * math.sqrt(SEC_PER_YEAR) * 100 * random.uniform(0.9, 1.1)
+
+    def trades(self, market, p_true):
+        """Demo Kalshi prints: takers lean toward the side the (noisy) truth favours, as informed traders do."""
+        if not market or market.get("yes_bid") is None or market.get("yes_ask") is None or p_true is None:
+            return []
+        out = []
+        mid = (market["yes_bid"] + market["yes_ask"]) / 2
+        for _ in range(random.choices([0, 1, 2, 3], [0.35, 0.35, 0.2, 0.1])[0]):
+            buy_yes = random.random() < min(0.9, max(0.1, 0.5 + 1.5 * (p_true + random.gauss(0, 0.05) - mid)))
+            out.append({"trade_id": uuid.uuid4().hex, "taker_side": "yes" if buy_yes else "no",
+                        "yes_price_dollars": f"{market['yes_ask'] if buy_yes else market['yes_bid']:.4f}",
+                        "count_fp": str(random.choice([1, 5, 10, 25, 50, 100, 250])), "created_time": iso(now())})
+        return out
 
     def avg_before(self, ts):
         vals = [v for s, v in self.hist if ts - SETTLE_SAMPLES <= s < ts]
@@ -583,6 +649,9 @@ class Engine:
         self.signal = {}
         peers = [a for a in (hub.assets if hub else []) if a != asset] or [a for a in ASSETS if a != asset]
         self.council = Council(os.path.join(self.data_dir, "agents_state.json"), self.window_sec, peers=peers)
+        self.exec = ExecSim(os.path.join(self.data_dir, "exec_sim.json"), self.window_sec)
+        self._rv1h = (0, None)
+        self._exec_saved = 0.0
         self.clients = set()
         self.session = None
         self._csv_day = None
@@ -736,6 +805,37 @@ class Engine:
         out["tech"] = self.tech()
         return out
 
+    def rv_1h(self):
+        """Realized $/second volatility over the last hour (refreshed once a minute)."""
+        t = int(now())
+        if t - self._rv1h[0] >= 60:
+            self._rv1h = (t, self.sigma(3600)[0])
+        return self._rv1h[1]
+
+    def implied_sigma(self, spot):
+        """Options-implied $/second volatility and where it came from (None if unavailable)."""
+        if self.demo and self.world:
+            ann = self.world.implied_annual()
+            return spot * ann / 100 / math.sqrt(SEC_PER_YEAR), f"demo options ({ann:.0f}%)"
+        if not self.hub:
+            return None, ""
+        cur = DVOL_CURRENCIES.get(self.asset)
+        if cur:
+            ann = self.hub.optvol.get(cur)
+            if ann is None:
+                return None, ""
+            return spot * ann / 100 / math.sqrt(SEC_PER_YEAR), f"Deribit DVOL {ann:.1f}%"
+        # no options index for this coin: scale its own 1-hour realized vol by BTC's implied/realized ratio
+        btc = self.hub.engines.get("BTC")
+        ann = self.hub.optvol.get("BTC")
+        if not btc or ann is None or not btc.samples:
+            return None, ""
+        btc_rv, own_rv = btc.rv_1h(), self.rv_1h()
+        if not btc_rv or not own_rv:
+            return None, ""
+        btc_iv = btc.samples[-1][1] * ann / 100 / math.sqrt(SEC_PER_YEAR)
+        return own_rv * btc_iv / btc_rv, f"BTC DVOL {ann:.1f}% × this coin's realized vol"
+
     # ----- fair value model ------------------------------------------------------------
 
     def compute_model(self):
@@ -779,6 +879,12 @@ class Engine:
         else:
             p = 1.0 if mean >= K else 0.0
         run_avg = (sum(known) / k) if k else None
+        # the same model with options-implied volatility instead of recent realized volatility
+        sig_iv, iv_src = self.implied_sigma(S)
+        p_iv = None
+        if sig_iv and K is not None and sig_eff:
+            sd_iv = sig_iv * self.cfg["vol_mult"] * math.sqrt(var_sum) / SETTLE_SAMPLES if var_sum > 0 else 0.0
+            p_iv = norm_cdf((mean - K) / sd_iv) if sd_iv > 1e-9 else (1.0 if mean >= K else 0.0)
         # "what's locked in": the move needed in the remaining prints to flip the result
         need = None
         if K is not None and mfut:
@@ -789,6 +895,8 @@ class Engine:
             "settle_mean": mean, "settle_sd": sd, "sigma": sig, "sigma_eff": sig_eff, "sigma_n": nsig,
             "p_up": p, "samples_in": k, "samples_left": mfut, "run_avg": run_avg,
             "move_needed": need, "secs_left": close - t, "in_settle": t >= settle_start,
+            "sigma_iv": sig_iv, "iv_source": iv_src, "p_iv": p_iv,
+            "iv_ratio": (sig_iv / sig) if (sig_iv and sig) else None,
         }
 
     # ----- signals ---------------------------------------------------------------------
@@ -996,6 +1104,11 @@ class Engine:
         self.windows = self.windows[-500:]
         save_json(self.windows_path, self.windows)
         self.settle_paper(w["ticker"], result)
+        try:
+            self.exec.settle(w["ticker"], result, w["close_ts"])
+            self.exec.save()
+        except Exception as e:
+            print(f"execution test error: {e}")
         lt = to_local(w["open_ts"], "ET")
         try:
             self.council.settle(w["ticker"], result, w["close_ts"], lt.hour, lt.minute, self.cfg)
@@ -1086,7 +1199,8 @@ class Engine:
         realized = sum(p["pnl"] for p in team_closed)
         return {
             "open": [p for p in team_open if p["ticker"] == tk],
-            "entries_this_window": sum(1 for p in team_open + team_closed if p["ticker"] == tk),
+            "entries_this_window": sum(1 for p in team_open + team_closed if p["ticker"] == tk)
+                                   + sum(1 for o in self.exec.open_orders(tk, "paper") if not o.get("pos_id")),
             "today_pnl": sum(p["pnl"] for p in team_closed if p.get("exit_ts", "")[:10] == today),
             "equity": self.cfg["agent_bankroll"] + realized,
             "realized": realized, "trades": len(team_closed),
@@ -1099,8 +1213,14 @@ class Engine:
         try:
             ctx = build_ctx(self, to_local)
             f = self.council.step(ctx, self.cfg)
+            self.run_exec(ctx, f)
             act = self.council.decide(ctx, f, self.cfg, self.team_book())
-            if act["action"] == "BUY":
+            if act["action"] == "BUY" and act.get("order") == "limit":
+                o = self.exec.post("paper", self.market, act["side"], act["contracts"], limit=act["price"], fair=act["prob"])
+                if o:
+                    self.notify_trade(f"{self.asset} team paper LIMIT BUY {act['side'].upper()} ×{o['contracts']} at "
+                                      f"{o['limit'] * 100:.0f}¢ (fair {act['prob'] * 100:.0f}¢) · resting · {o['ticker']}")
+            elif act["action"] == "BUY":
                 pos = self.paper_buy(act["side"], act["contracts"], source="team", fair=act["prob"])
                 self.notify_trade(f"{self.asset} team paper BUY {act['side'].upper()} ×{act['contracts']} at "
                                   f"{pos['entry_price'] * 100:.0f}¢ (fair {act['prob'] * 100:.0f}¢, edge {act['ev'] * 100:+.1f}¢) · {pos['ticker']}")
@@ -1110,6 +1230,80 @@ class Engine:
                                   f"{pos['exit_price'] * 100:.0f}¢ · P&L ${pos['pnl']:+.2f}")
         except Exception as e:          # the team must never take the monitor down
             self.council.decision = {"action": "WAIT", "reasons": [f"Agent error: {e}"]}
+
+    def run_exec(self, ctx, f):
+        """Limit orders: pull stale ones, fill any the book has crossed, and run the taker-vs-limit test."""
+        try:
+            m, cfg = self.market, self.cfg
+            if not m:
+                return
+            p_team = f["p_team"] if f else None
+            secs = self.model.get("secs_left")
+            scale = self.window_sec / WINDOW_SEC
+            self.exec.manage(m["ticker"], p_team, secs, cfg, cfg["no_entry_last_sec"] * scale)
+            self.apply_fills(self.exec.on_book(m, float(cfg.get("maker_fee_mult", 0) or 0)))
+            self.exec.evaluate(ctx, p_team, cfg, scale)
+            if self.exec.dirty and now() - self._exec_saved > 10:
+                self.exec.save()
+                self._exec_saved = now()
+        except Exception as e:             # never let the execution test take the monitor down
+            self.exec.trades_err = f"execution test: {e}"[:160]
+
+    def apply_fills(self, events):
+        """Filled team limit orders become (or add to) team paper positions."""
+        changed = False
+        for ev in events:
+            o = ev["order"]
+            if o["lane"] != "paper":
+                continue
+            pos = next((p for p in self.paper["positions"] if p["id"] == o.get("pos_id")), None)
+            if pos is None:
+                fair = o.get("fair")
+                pos = {"id": uuid.uuid4().hex[:8], "ticker": o["ticker"], "side": o["side"], "contracts": 0,
+                       "source": "team", "order": "limit", "entry_price": o["limit"], "entry_fee": 0.0,
+                       "entry_ts": iso(now()), "entry_fair": fair,
+                       "entry_ev": (fair - o["limit"]) if fair is not None else None,
+                       "secs_left_at_entry": round(self.model.get("secs_left") or 0),
+                       "strike": (self.market or {}).get("strike")}
+                self.paper["positions"].append(pos)
+                o["pos_id"] = pos["id"]
+                self.notify_trade(f"{self.asset} team limit order FILLED {o['side'].upper()} at {o['limit'] * 100:.0f}¢ · {o['ticker']}")
+            pos["contracts"] += ev["qty"]
+            pos["entry_fee"] = round(pos["entry_fee"] + ev["fee"], 4)
+            changed = True
+        if changed:
+            save_json(self.paper_path, self.paper)
+
+    async def trades_loop(self):
+        """While limit orders rest, read Kalshi's printed trades to see whether any would have filled them."""
+        while True:
+            await asyncio.sleep(2)
+            orders = self.exec.orders
+            if not orders:
+                continue
+            mult = float(self.cfg.get("maker_fee_mult", 0) or 0)
+            for tk in sorted({o["ticker"] for o in orders}):
+                since = min(o["posted_ts"] for o in orders if o["ticker"] == tk)
+                try:
+                    if self.demo:
+                        raw = self.world.trades(self.market if (self.market or {}).get("ticker") == tk else None,
+                                                self.model.get("p_up"))
+                    else:
+                        raw, cursor = [], None
+                        for _ in range(3):
+                            params = {"ticker": tk, "min_ts": int(since) - 1, "limit": 1000}
+                            if cursor:
+                                params["cursor"] = cursor
+                            data = await self.kalshi_get("/markets/trades", params)
+                            raw += data.get("trades", []) or []
+                            cursor = data.get("cursor")
+                            if not cursor:
+                                break
+                    trades = [t for t in (parse_trade(r, parse_ts) for r in raw) if t]
+                    self.apply_fills(self.exec.on_trades(tk, trades, mult))
+                    self.exec.trades_ok, self.exec.trades_err, self.exec.trades_ts = True, "", now()
+                except Exception as e:
+                    self.exec.trades_ok, self.exec.trades_err = False, f"Kalshi trades: {e}"[:160]
 
     def notify_trade(self, text):
         if self.hub and self.hub.alerter.alert_trades:
@@ -1242,6 +1436,10 @@ class Engine:
             "overview": self.hub.overview() if self.hub else [],
             "alerts": self.hub.alerter.status() if self.hub else None,
             "flow": self.flow.stats(), "perp": self.perp.to_dict(comp),
+            "options": {"source": self.model.get("iv_source"), "iv_ratio": self.model.get("iv_ratio"),
+                        "p_iv": self.model.get("p_iv"),
+                        "error": "" if self.demo or not self.hub else self.hub.optvol.error},
+            "execution": dict(self.exec.summary(), week=self.exec.summary(now() - 7 * 86400)),
             "config": self.cfg, "feeds": [f.to_dict(comp, n in used) for n, f in self.feeds.items()],
             "market": m, "market_err": self.market_err, "market_age": now() - self.market_ts if self.market_ts else None,
             "model": self.model, "signal": self.signal, "calibration": self.calibration(),
@@ -1264,7 +1462,7 @@ class Engine:
 
     def tasks(self, session, delay=0.0):
         self.session = session
-        tasks = [self.sample_loop(), self.kalshi_loop(delay), self.settle_loop()]
+        tasks = [self.sample_loop(), self.kalshi_loop(delay), self.settle_loop(), self.trades_loop()]
         if not self.demo:
             f, sp = self.feeds, self.spec
             tasks += [coinbase_task(session, f["Coinbase"], sp["coinbase"], self.flow),
@@ -1278,6 +1476,10 @@ class Engine:
     def close(self):
         if self._csv_file:
             self._csv_file.close()
+        try:
+            self.exec.save()
+        except OSError:
+            pass
 
 
 class Hub:
@@ -1288,6 +1490,7 @@ class Hub:
         self.demo = demo
         self.events = Events(os.path.join(HERE, "events.json"), to_local)
         self._common = {}
+        self.optvol = OptionsVol()
         self.engines = {a: Engine(a, self, demo, demo_window) for a in self.assets}
         self.session = None
         self.alerter = Alerter()
@@ -1338,6 +1541,8 @@ class Hub:
         for i, e in enumerate(self.engines.values()):
             coros += e.tasks(self.session, delay=i * 0.33)
         coros.append(self.events_loop())
+        if not self.demo:
+            coros.append(deribit_loop(self.session, self.optvol))
         self.alerter.session = self.session
         coros.append(self.watch_loop())
         app["tasks"] = [asyncio.create_task(c) for c in coros]
@@ -1446,6 +1651,13 @@ class Hub:
                 f"  today {len(today)} trades ${sum(p['pnl'] for p in today):+.2f} · all-time {book['trades']} trades "
                 f"${book['realized']:+.2f} · bankroll ${book['equity']:.2f}\n"
                 f"  active agents: {', '.join(active)}")
+            x = e.exec.summary(now() - 7 * 86400)
+            tk, mk = x["taker"], x["maker"]
+            if tk["trades"] or mk["trades"] or mk["missed_win"] or mk["missed_loss"]:
+                lines.append(f"  execution test, last 7 days: taker {tk['trades']} trades ${tk['pnl']:+.2f} · "
+                             f"limit {mk['trades']} fills ${mk['pnl']:+.2f}"
+                             + (f" (unfilled would have won {mk['missed_win']}, lost {mk['missed_loss']})"
+                                if mk['missed_win'] or mk['missed_loss'] else ""))
         return "\n".join(lines)
 
     async def stop(self, app):
@@ -1526,6 +1738,9 @@ def build_app(hub: Hub) -> web.Application:
             except (TypeError, ValueError):
                 return web.json_response({"error": f"bad value for {k}"}, status=400)
         engine.cfg["contracts"] = max(1, int(engine.cfg["contracts"]))
+        if engine.cfg["order_type"] not in ("taker", "maker"):
+            engine.cfg["order_type"] = "taker"
+        engine.cfg["maker_fee_mult"] = max(0.0, float(engine.cfg["maker_fee_mult"]))
         save_json(engine.config_path, engine.cfg)
         return web.json_response(engine.cfg)
 

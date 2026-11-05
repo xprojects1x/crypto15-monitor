@@ -82,7 +82,7 @@ and paper trades made there live in that codespace. Stop or delete the codespace
 | Panel | What it shows |
 |---|---|
 | **Index proxy** | 1-second price for the coin built from Coinbase, Kraken, Bitstamp, Gemini and Crypto.com (median of exchange mid prices; any feed >0.5% off or >10s stale is dropped). It stands in for CF Benchmarks' BRTI, ETHUSD RTI or SOLUSD RTI. |
-| **Exchange feeds** | Each exchange's mid, plus the **Kraken perpetual future**, taker **buy/sell flow** (Coinbase + Kraken trades), Kraken **order-book imbalance**, futures **premium** and **funding**. |
+| **Exchange feeds** | Each exchange's mid, plus the **Kraken perpetual future**, taker **buy/sell flow** (Coinbase + Kraken trades), Kraken **order-book imbalance**, futures **premium** and **funding**, and **options-implied volatility** (Deribit DVOL) next to recent realized volatility. |
 | **Price to beat** | Kalshi's `floor_strike` for the live window: the 60-second BRTI average before the window opened. |
 | **Settlement average (est.)** | The model's expected value of the 60 prints Kalshi will average, with ±1σ. In the final minute it shows how many prints are already locked in and the move needed in the remaining prints to flip the result. |
 | **Fair P(Up)** | Model probability that the settlement average finishes at or above the price to beat, next to Kalshi's mid. |
@@ -152,6 +152,7 @@ information and keeps learning from every settled window. Memory is saved per co
 | Cross-asset | Other coins | moves in the other two coins this one hasn't matched yet | Probation |
 | Events & volatility | Regime | data-release times, Fed decisions, US open, weekends, volatility spikes (adjusts confidence) | Probation |
 | Chart reading | Technical | RSI(14), Bollinger %B(20), MACD(12,26,9) on 1-minute bars (needs ~36 min of data) | Probation |
+| Options volatility | Options market | the settlement model run with Deribit's options-implied volatility (DVOL) instead of recent realized volatility; SOL has no DVOL, so it uses BTC's implied/realized ratio applied to SOL's own volatility | Probation |
 
 * **Probation:** agents on probation forecast, learn and are scored, but have **no say** in the team forecast or trades.
   A shadow coordinator that includes everyone measures what each would add. After ~200 windows (setting: *Probation
@@ -175,6 +176,26 @@ information and keeps learning from every settled window. Memory is saved per co
   than the team's fair value.
 
 All of these settings are on the dashboard under *Agent team (paper)*, separately for each coin.
+
+**Execution test: buy at the ask vs limit orders.** Taking the ask costs Kalshi's taker fee (up to about 1.75¢ per
+contract near 50¢). A resting limit order pays no fee on series that Kalshi's fee schedule doesn't list (their maker
+multiplier is 0), but it only fills when someone sells to you, which tends to happen when the price is moving against
+you. To measure which effect wins, every window the team's forecast is traded both ways with the same size and entry
+rules, from day one and without waiting for proof:
+
+* **Taker:** buys at the ask the first second the edge after taker fees reaches your minimum.
+* **Limit:** posts a bid 1¢ above the best bid (or joins it when the spread is 1¢) the first second the edge at that
+  price reaches your minimum. It is cancelled if the team's fair value drops below the limit, or at the no-entry cutoff.
+
+Fills are simulated conservatively from Kalshi's public trade prints (`GET /markets/trades`):
+* A limit bid fills only when a real taker sold at or through its price.
+* At its exact price, it first waits behind the size that was already resting there.
+* It fills at once if the other side of the book crosses it.
+
+The dashboard's *Execution test* table shows both ways side by side (last 7 days or all time), with the fill rate and
+how the unfilled orders would have done, and the daily summary includes the last 7 days. If limit orders come out
+ahead, set **Team order type** to *limit order (maker)* and the risk manager's own paper trades will rest the same way.
+**Maker fee multiplier** stays 0 unless Kalshi's fee schedule lists one for the series.
 
 **Event calendar:** `events.json` lists Fed decision dates (marked high impact) and the recurring weekday times when
 US data comes out or stocks open. Add CPI and jobs-report dates as `"impact": "high"` and the team will sit out around
@@ -266,6 +287,7 @@ Each window's price to beat and settlement value are official 60-second averages
 * `agents_state.json`: everything the agent team has learned.
 * `windows.json`: every settled window with Kalshi's strike and settlement value next to ours.
 * `paper_trades.json`: open and closed paper trades.
+* `exec_sim.json`: the execution test (taker vs limit orders) and any resting team limit orders.
 * `config.json`: your saved settings.
 * `history/`: `windows.csv` (one row per settled window), `daily.csv`, `hourly.csv`, `weekday.csv`, `summary.json`, `report.html`, and `candles.jsonl` (cached Kalshi prices).
 
@@ -279,6 +301,11 @@ Each window's price to beat and settlement value are official 60-second averages
   trade), Bitstamp `ws.bitstamp.net`, Gemini `api.gemini.com/v1/marketdata`, Crypto.com `stream.crypto.com/exchange/v1/market`.
 * Kraken Futures `futures.kraken.com/ws/v1` ticker for `PF_XBTUSD`, `PF_ETHUSD`, `PF_SOLUSD`: public market data. If it
   isn't reachable from your location, the derivatives agent sits out and everything else runs normally.
+
+* Kalshi public trades: `GET /markets/trades?ticker=…&min_ts=…`, polled every 2 seconds only while a simulated limit
+  order is resting.
+* Deribit public volatility index (DVOL): `GET https://www.deribit.com/api/v2/public/get_volatility_index_data`
+  for BTC and ETH, once a minute. If Deribit isn't reachable from your server, the options agent sits out.
 
 If Kalshi or an exchange changes its API, the affected panel shows the error and everything else keeps running.
 

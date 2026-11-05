@@ -159,7 +159,7 @@ footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
 
     <section class="card" id="teamCard">
       <div class="chart-head"><h2>Agent team</h2><span id="teamStatus" class="status neutral">—</span></div>
-      <p class="muted" style="font-size:12px;margin:0 0 10px">Ten specialists forecast every window and learn from every settlement. Active agents shape the team forecast; agents on probation are scored silently until they prove they help. The risk manager paper-trades only after the team clearly beats Kalshi's own prices.</p>
+      <p class="muted" style="font-size:12px;margin:0 0 10px">Eleven specialists forecast every window and learn from every settlement. Active agents shape the team forecast; agents on probation are scored silently until they prove they help. The risk manager paper-trades only after the team clearly beats Kalshi's own prices.</p>
       <div class="team-top">
         <div class="tile"><div class="lab">Team P(Up) now</div><div class="val num" id="tmP">—</div><div class="sub num" id="tmPsub">—</div></div>
         <div class="tile"><div class="lab">Risk manager</div><div class="val" id="tmAct" style="font-size:18px">—</div><div class="sub" id="tmActSub">—</div></div>
@@ -176,6 +176,16 @@ footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
       </div>
       <div class="chart" id="cLearn" style="min-height:180px"></div>
       <details style="margin-top:8px"><summary>What the team learned recently</summary><ul class="log" id="tmLog"></ul></details>
+      <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:10px">
+        <div class="chart-head"><h2>Execution test: buy at the ask vs limit orders</h2><span id="exFeed" class="muted" style="font-size:12px"></span></div>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">Every window, the team's forecast is traded two ways with the same size and entry rules, before any proof is needed. <b>Taker</b> buys at the ask and pays Kalshi's taker fee. <b>Limit</b> rests a bid 1¢ above the best bid, pays no fee (unless you set one), and fills only when a real Kalshi trade reaches it, which tends to happen when the price is moving against you. Paper only.</p>
+        <div class="tabs" id="exTabs" style="margin-bottom:6px"><button data-ex="week" class="on">Last 7 days</button><button data-ex="all">All time</button></div>
+        <div class="tablewrap"><table>
+          <thead><tr><th style="text-align:left">Way to trade</th><th>Trades</th><th>Won</th><th>P&amp;L</th><th>Per trade</th><th>Fees</th></tr></thead>
+          <tbody id="exBody"></tbody>
+        </table></div>
+        <div class="muted" id="exNote" style="font-size:12px;margin-top:6px"></div>
+      </div>
     </section>
 
     <section class="card">
@@ -271,6 +281,8 @@ footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
         <label for="max_bet_pct">Max bet (% of bankroll)</label><input id="max_bet_pct" data-scale="100" type="number" step="0.5">
         <label for="daily_loss_limit">Daily loss limit ($)</label><input id="daily_loss_limit" type="number" step="10" min="0">
         <label for="min_learned_windows">Windows to learn before trading</label><input id="min_learned_windows" type="number" step="10" min="0">
+        <label for="order_type">Team order type</label><select id="order_type"><option value="taker">buy at the ask (taker)</option><option value="maker">limit order (maker)</option></select>
+        <label for="maker_fee_mult">Maker fee multiplier</label><input id="maker_fee_mult" type="number" step="0.25" min="0" title="0 for series not listed in Kalshi's fee schedule">
         <label for="probation_windows">Probation length (windows)</label><input id="probation_windows" type="number" step="10" min="20">
         <label for="avoid_events">Sit out high-impact events</label><select id="avoid_events"><option value="true">yes</option><option value="false">no</option></select>
         <label for="event_buffer_min">…minutes either side</label><input id="event_buffer_min" type="number" step="5" min="0">
@@ -515,7 +527,10 @@ function render(s){
   const sgn = v => v==null ? '—' : `${v>=0?'+':'−'}${Math.abs(v*100).toFixed(0)}%`;
   $('flowLine').innerHTML = `Taker flow 15s / 1m / 5m: <b class="num">${sgn(fl.tfi15)} / ${sgn(fl.tfi60)} / ${sgn(fl.tfi300)}</b> (positive = buyers)<br>
     Order book (Kraken top 10): <b class="num">${sgn(fl.book)}</b> bids vs asks · trades/min <b class="num">${fl.trades_per_min ?? '—'}</b><br>
-    Futures premium <b class="num">${pr.premium!=null ? (pr.premium>=0?'+':'')+pr.premium.toFixed(3)+'%' : '—'}</b> · funding <b class="num">${pr.funding!=null ? (pr.funding*100).toFixed(4)+'%' : '—'}</b>`;
+    Futures premium <b class="num">${pr.premium!=null ? (pr.premium>=0?'+':'')+pr.premium.toFixed(3)+'%' : '—'}</b> · funding <b class="num">${pr.funding!=null ? (pr.funding*100).toFixed(4)+'%' : '—'}</b><br>
+    ${(() => { const o = s.options || {};
+      if (!o.source) return `Options volatility: <span class="muted">${o.error ? 'unavailable (' + o.error.replace(/</g,'&lt;') + ')' : 'waiting for data'}</span>`;
+      return `Options volatility: <b class="num">${o.source}</b> · implied vs recent <b class="num">${o.iv_ratio!=null ? o.iv_ratio.toFixed(2)+'×' : '—'}</b>${o.p_iv!=null ? ` · P(Up) with it <b class="num">${pct(o.p_iv)}</b>` : ''}`; })()}`;
 
   // calibration
   const cb = s.calibration || {};
@@ -556,6 +571,7 @@ function render(s){
     || '<tr><td colspan="5" class="muted" style="font-family:var(--sans)">No closed trades yet.</td></tr>';
 
   renderTeam(s);
+  renderExec(s.execution);
   renderAlerts(s.alerts);
   fillConfig(s.config);
   drawCharts(s);
@@ -611,6 +627,31 @@ function renderTeam(s){
       ? `<li>${new Date(l.t*1000).toLocaleTimeString()} · <b class="${l.event==='promoted'?'up':'down'}">${l.agent} ${l.event}</b>: ${l.detail}</li>`
       : `<li>${new Date(l.t*1000).toLocaleTimeString()} · window settled <b>${l.result}</b> (team had ${pct(l.team_p)} Up) · ${l.lessons} lessons · most helpful so far: ${l.top}</li>`).join('') || '<li>No settled windows yet.</li>';
 }
+
+// ---------- execution test ----------
+let EXV = 'week';
+try { EXV = localStorage.getItem('c15ex') || 'week'; } catch(e){}
+let lastExec = null;
+function renderExec(X){
+  if (!X) return; lastExec = X;
+  const S = EXV === 'week' ? X.week : X, t = S.taker, m = S.maker;
+  document.querySelectorAll('#exTabs [data-ex]').forEach(b => b.classList.toggle('on', b.dataset.ex === EXV));
+  const row = (name, sub, x) => `<tr><td class="agname"><b>${name}</b><span>${sub}</span></td><td>${x.trades}</td>
+    <td>${x.win_rate!=null ? pct(x.win_rate) : '—'}</td><td class="${x.pnl>=0?'up':'down'}">${x.trades ? moneyS(x.pnl) : '—'}</td>
+    <td class="${(x.per_trade||0)>=0?'up':'down'}">${x.per_trade!=null ? moneyS(x.per_trade) : '—'}</td><td>${x.fees!=null && x.trades ? money(x.fees) : '—'}</td></tr>`;
+  $('exBody').innerHTML = row('Taker', 'buy at the ask', t) + row('Limit', 'rest a bid, fill only if traded through', m);
+  const parts = [];
+  if (EXV === 'all' && m.windows) parts.push(`Limit orders filled in ${pct(m.fill_rate,0)} of ${m.windows} windows where one was posted (${m.contract_fill_rate!=null ? pct(m.contract_fill_rate,0) : '—'} of contracts)`);
+  if (m.missed_win || m.missed_loss) parts.push(`unfilled orders would have won ${m.missed_win} and lost ${m.missed_loss}`);
+  const open = (X.open_orders||[]).filter(o => o.lane === 'test' || o.lane === 'paper');
+  if (open.length) parts.push('resting now: ' + open.map(o => `${o.lane==='paper'?'team ':''}${o.side==='up'?'▲':'▼'} ${o.filled}/${o.contracts} at ${c(o.limit)}${o.queue_ahead>0?` (${Math.round(o.queue_ahead)} ahead)`:''}`).join(', '));
+  if (!t.trades && !m.trades && !parts.length) parts.push('Nothing yet: entries need the team\'s edge to clear your minimum.');
+  $('exNote').innerHTML = parts.join(' · ');
+  const f = X.trades_feed || {};
+  $('exFeed').innerHTML = f.ok === false ? `<span class="down">trades feed: ${(f.error||'').replace(/</g,'&lt;')}</span>` : f.ok ? 'trades feed ✓' : '';
+}
+document.addEventListener('click', e => { const b = e.target.closest('#exTabs [data-ex]'); if (!b) return;
+  EXV = b.dataset.ex; try { localStorage.setItem('c15ex', EXV); } catch(err){} if (lastExec) renderExec(lastExec); });
 
 // ---------- alerts ----------
 function renderAlerts(A){

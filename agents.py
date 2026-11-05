@@ -16,6 +16,7 @@ into paper trades (or no trade), and a scorekeeper measures what each agent real
     cross     Cross-asset           probation   do the other coins move first?
     regime    Events & volatility   probation   confidence near data releases, Fed days, US open, vol spikes
     tech      Chart reading         probation   RSI, Bollinger %B, MACD on 1-minute bars
+    options   Options volatility    probation   options-implied volatility (Deribit DVOL) in the settlement model
 
   Probation   New agents forecast, learn and are scored, but have no say in the team forecast. A "shadow"
               coordinator that includes every agent measures what each would add. An agent is promoted when
@@ -23,7 +24,8 @@ into paper trades (or no trade), and a scorekeeper measures what each agent real
               value is clearly negative.
   Coordinator online logistic "stacking" per phase of the window (early / middle / late)
   Risk manager trades only after the team clearly beats Kalshi's prices, with fractional Kelly sizing,
-              hard caps, a daily loss limit, and stand-asides around high-impact events
+              hard caps, a daily loss limit, and stand-asides around high-impact events; buys at the ask, or
+              (order_type "maker") rests limit orders that fill only when a real trade reaches them
   Scorekeeper log-loss vs Kalshi's price, value added (leave-one-out), solo paper P&L
 
 Nothing here places real orders.
@@ -35,6 +37,8 @@ import math
 import os
 import time
 from collections import deque
+
+from execution import maker_limit
 
 EPS = 1e-6
 CHECKPOINTS = (840, 720, 600, 480, 360, 240, 150)     # seconds-left marks where forecasts are recorded
@@ -379,6 +383,21 @@ class RegimeAgent(Agent):
                 L * (1.0 if r.get("us_open") else 0.0), L * (1.0 if r.get("weekend") else 0.0), 1.0]
 
 
+class OptionsAgent(Agent):
+    key, name, category = "options", "Options volatility", "Options market"
+    blurb = ("Deribit options-implied volatility (DVOL; SOL borrows BTC's) in the settlement model instead of recent "
+             "realized volatility; learns when the options market's view of risk is the better one.")
+    init = (0.5, 0.5, 0.0, 0.0)      # [log-odds with implied vol, log-odds with realized vol, x log(implied/realized), bias]
+    start_status = "probation"
+
+    def features(self, ctx, council):
+        if ctx.get("p_iv") is None or ctx.get("p_model") is None:
+            return None
+        Li, Lm = clip(logit(ctx["p_iv"]), 8), clip(logit(ctx["p_model"]), 8)
+        r = math.log(ctx["iv_ratio"]) if ctx.get("iv_ratio") and ctx["iv_ratio"] > 0 else 0.0
+        return [Li, Lm, Lm * clip(r, 2), 1.0]
+
+
 class TechAgent(Agent):
     key, name, category = "tech", "Chart reading", "Technical"
     blurb = "Classic chart indicators on 1-minute bars: RSI(14), Bollinger %B(20), MACD(12,26,9) histogram."
@@ -395,8 +414,25 @@ class TechAgent(Agent):
 
 
 AGENT_CLASSES = (PriceAgent, MomentumAgent, LeadAgent, CrowdAgent, PatternAgent,
-                 FlowAgent, DerivsAgent, CrossAgent, RegimeAgent, TechAgent)
+                 FlowAgent, DerivsAgent, CrossAgent, RegimeAgent, TechAgent, OptionsAgent)
 TEAM_INIT = {"price": 0.5, "momentum": 0.2, "lead": 0.1, "crowd": 0.3}
+# the agent order saved files used before agents were recorded by name (so new agents can be added without
+# losing what the coordinators learned)
+LEGACY_KEYS = ("price", "momentum", "lead", "crowd", "pattern", "flow", "derivs", "cross", "regime", "tech")
+
+
+def remap_weights(dump, old_keys, new_keys, fill):
+    """Re-order a coordinator's saved weights from old_keys to new_keys (+ bias last); new agents get fill[key]."""
+    if not dump or len(dump.get("w", [])) != len(old_keys) + 1:
+        return dump
+    out = dict(dump)
+    for field in ("w", "prior"):
+        old = dump.get(field) or dump["w"]
+        if len(old) != len(old_keys) + 1:
+            old = dump["w"]
+        pos = {k: i for i, k in enumerate(old_keys)}
+        out[field] = [old[pos[k]] if k in pos else fill.get(k, 0.0) for k in new_keys] + [old[-1]]
+    return out
 
 
 # --------------------------------------------------------------------------- the council
@@ -433,6 +469,7 @@ class Council:
 
     def dump(self):
         return {"version": STATE_VERSION, "window_sec": self.window_sec, "saved": time.time(),
+                "keys": [a.key for a in self.agents],
                 "agents": {a.key: a.dump() for a in self.agents}, "status": self.status,
                 "meta": {k: m.dump() for k, m in self.meta.items()},
                 "shadow": {k: m.dump() for k, m in self.shadow.items()},
@@ -460,10 +497,12 @@ class Council:
         for k, s in (d.get("status") or {}).items():
             if k in self.status and s in ("active", "probation"):
                 self.status[k] = s
+        old_keys = tuple(d.get("keys") or LEGACY_KEYS)
+        new_keys = tuple(a.key for a in self.agents)
         for k, m in self.meta.items():
-            m.load(d.get("meta", {}).get(k))
+            m.load(remap_weights(d.get("meta", {}).get(k), old_keys, new_keys, TEAM_INIT))
         for k, m in self.shadow.items():
-            m.load(d.get("shadow", {}).get(k))
+            m.load(remap_weights(d.get("shadow", {}).get(k), old_keys, new_keys, TEAM_INIT))
         self.team.load(d.get("team"))
         self.market.load(d.get("market"))
         self.results = deque(d.get("results", []), maxlen=50)
@@ -669,13 +708,23 @@ class Council:
             self.decision = act
             return act
         p = f["p_team"]
+        limit_orders = cfg.get("order_type") == "maker"
+        mult = float(cfg.get("maker_fee_mult", 0) or 0)
         sides = []
         for side, prob, ask, bid in (("up", p, ctx.get("yes_ask"), ctx.get("yes_bid")),
                                      ("down", 1 - p, ctx.get("no_ask"), ctx.get("no_bid"))):
             if ask is None:
                 continue
-            ev = prob - ask - fee_pc(ask)
-            sides.append({"side": side, "prob": prob, "ask": ask, "bid": bid, "ev": ev})
+            if limit_orders:              # rest a bid instead of paying the ask (and the taker fee)
+                lim = maker_limit(bid, ask)
+                if lim is None:
+                    continue
+                fee = mult * 0.0175 * lim * (1 - lim)
+                sides.append({"side": side, "prob": prob, "ask": ask, "bid": bid, "price": lim, "fee": fee,
+                              "ev": prob - lim - fee})
+            else:
+                sides.append({"side": side, "prob": prob, "ask": ask, "bid": bid, "price": ask, "fee": fee_pc(ask),
+                              "ev": prob - ask - fee_pc(ask)})
         act["sides"] = sides
 
         # exits first: take the market's overpayment
@@ -714,19 +763,20 @@ class Council:
             self.decision = act
             return act
 
-        price = best["ask"] + fee_pc(best["ask"])
+        price = best["price"] + best["fee"]
         kelly = max(0.0, (best["prob"] - price) / (1 - price))
         bank = max(0.0, book["equity"])
         stake = min(cfg["kelly_fraction"] * kelly * bank, cfg["max_bet_pct"] * bank)
         n = int(stake // price)
-        cap = ctx.get("yes_ask_size") if best["side"] == "up" else None
+        cap = ctx.get("yes_ask_size") if best["side"] == "up" and not limit_orders else None
         if cap:
             n = min(n, int(cap))
         if n < 1:
             reasons.append("Edge too small for the paper bankroll at this Kelly fraction")
             self.decision = act
             return act
-        act.update({"action": "BUY", "side": best["side"], "contracts": n, "price": best["ask"],
+        act.update({"action": "BUY", "side": best["side"], "contracts": n, "price": best["price"],
+                    "order": "limit" if limit_orders else "market",
                     "prob": best["prob"], "ev": best["ev"], "kelly": kelly, "stake": n * price})
         self.decision = act
         return act
@@ -829,7 +879,9 @@ def build_ctx(engine, to_local):
     ctx = {"ticker": m["ticker"], "secs_left": secs, "window_sec": engine.window_sec,
            "p_model": md.get("p_up"), "z": None, "ret": None, "dev": None, "disp": None, "sd": sd,
            "yes_bid": m.get("yes_bid"), "yes_ask": m.get("yes_ask"), "no_bid": m.get("no_bid"), "no_ask": m.get("no_ask"),
-           "yes_ask_size": m.get("yes_ask_size"), "n_feeds": engine.samples[-1][2]}
+           "yes_ask_size": m.get("yes_ask_size"), "yes_bid_size": m.get("yes_bid_size"),
+           "n_feeds": engine.samples[-1][2], "close_ts": m.get("close_ts"),
+           "p_iv": md.get("p_iv"), "iv_ratio": md.get("iv_ratio")}
     if sd > 0 and sig:
         ctx["z"] = (md["settle_mean"] - md["strike"]) / sd
         last_sec, last = engine.samples[-1][0], engine.samples[-1][1]
