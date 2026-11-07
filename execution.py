@@ -16,6 +16,14 @@ Execution test (always on, from day one, no proof needed)
 Team paper orders (setting order_type = "maker")
   The risk manager's own paper trades rest as limit orders in the same way, instead of buying at the ask.
 
+Reality check (are the prices we see real?)
+  Our Kalshi prices are a copy fetched once a second, which can trail Kalshi's real order book. So:
+    * every taker entry is checked against Kalshi's actual trade prints in the next few seconds: did anyone really
+      buy at the ask we assumed ("confirmed"), did trades only print at worse prices ("price was gone"), or was there
+      no trading to tell ("unknown")? P&L is reported for each group.
+    * every printed trade is compared with the quote we had at that second: a taker buy prints at the real ask and a
+      taker sell at the real bid, so the number of seconds until our copy shows that price measures how stale it is.
+
 Fill model (deliberately conservative)
   * A buy-Yes limit at L fills when Kalshi prints a trade where the taker sold Yes (taker_side "no") at a Yes price
     at or below L. At exactly L we first wait behind the size that was already resting there when we posted.
@@ -32,6 +40,9 @@ import uuid
 from collections import deque
 
 UNKNOWN_QUEUE = 1000         # resting size assumed ahead of us when Kalshi doesn't report the level's size
+CHECK_AFTER = 6              # seconds of trade prints after a taker entry that decide whether its price was real
+TOL = 0.0051                 # half a cent: prices are in whole cents
+MAX_LAG = 15                 # quote staleness is measured up to this many seconds
 
 
 def taker_fee_total(price, contracts):
@@ -83,6 +94,26 @@ def parse_trade(t, parse_ts):
             "count": cnt, "taker_side": side, "ts": parse_ts(t.get("created_time")) or 0.0}
 
 
+def blank_checks():
+    return {k: {"trades": 0, "wins": 0, "pnl": 0.0} for k in ("ok", "gone", "unknown")}
+
+
+def taker_check(pos, trades):
+    """Was the ask a taker entry assumed really there? 'ok', 'gone', or None (undecided yet)."""
+    t0, px = pos["ts"], pos["price"]
+    near = [t for t in trades if t0 - 1 <= t["ts"] <= t0 + CHECK_AFTER]
+    for t in near:                         # someone bought our side at our price or better
+        side_px = t["yes_price"] if pos["side"] == "up" else 1 - t["yes_price"]
+        bought_our_side = t["taker_side"] == ("yes" if pos["side"] == "up" else "no")
+        if bought_our_side and side_px <= px + TOL:
+            return "ok"
+    for t in near:                         # trades only printed at prices worse than ours
+        side_px = t["yes_price"] if pos["side"] == "up" else 1 - t["yes_price"]
+        if side_px > px + TOL:
+            return "gone"
+    return None
+
+
 def blank_stats():
     return {"taker": {"trades": 0, "wins": 0, "pnl": 0.0, "fees": 0.0, "contracts": 0},
             "maker": {"orders": 0, "windows": 0, "trades": 0, "wins": 0, "pnl": 0.0, "fees": 0.0,
@@ -103,6 +134,9 @@ class ExecSim:
         self.trades_ok = None                  # did the last trades request work?
         self.trades_err = ""
         self.trades_ts = 0.0
+        self.checks = blank_checks()           # taker P&L split by reality-check result
+        self.lags = deque(maxlen=3000)         # per printed trade: seconds until our quote showed its price (None = never)
+        self.trade_buf = {}                    # ticker -> recent parsed trades (for the reality check)
         self.dirty = False
         self.load()
 
@@ -122,17 +156,23 @@ class ExecSim:
         self.stats = st
         self.recent = deque(d.get("recent", []), maxlen=1500)
         self.since = d.get("since", self.since)
+        ck = blank_checks()
+        for k in ck:
+            ck[k].update((d.get("checks") or {}).get(k, {}))
+        self.checks = ck
+        self.lags = deque(d.get("lags", []), maxlen=3000)
 
     def save(self):
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"orders": self.orders, "test": self.test, "stats": self.stats,
-                       "recent": list(self.recent), "since": self.since}, f)
+            json.dump({"orders": self.orders, "test": self.test, "stats": self.stats, "checks": self.checks,
+                       "lags": list(self.lags), "recent": list(self.recent), "since": self.since}, f)
         os.replace(tmp, self.path)
         self.dirty = False
 
     def reset_test(self):
         self.test, self.stats, self.recent, self.since = {}, blank_stats(), deque(maxlen=1500), time.time()
+        self.checks, self.lags = blank_checks(), deque(maxlen=3000)
         self.orders = [o for o in self.orders if o["lane"] != "test"]
         self.save()
 
@@ -287,7 +327,8 @@ class ExecSim:
                 if ev >= cfg["min_edge"] and (best is None or ev > best[3]):
                     best = (side, ask, fee, ev)
             if best:
-                t["taker"] = {"side": best[0], "price": best[1], "contracts": C, "fee": best[2], "ev": best[3]}
+                t["taker"] = {"side": best[0], "price": best[1], "contracts": C, "fee": best[2], "ev": best[3],
+                              "ts": time.time(), "check": None}
                 self.dirty = True
         if t.get("maker") is None and not self.open_orders(tk, "test"):
             best = None
@@ -302,6 +343,46 @@ class ExecSim:
             if best:
                 mk["close_ts"] = ctx.get("close_ts")
                 self.post("test", mk, best[0], C, limit=best[1], fair=p_team if best[0] == "up" else 1 - p_team)
+
+    def needs_trades(self):
+        """Tickers whose trade prints are still needed: resting orders, or taker entries not yet checked."""
+        tks = {o["ticker"] for o in self.orders}
+        tks |= {tk for tk, t in self.test.items() if t.get("taker") and t["taker"].get("check") is None}
+        return tks
+
+    def check_takers(self, ticker, trades, now_ts=None):
+        """Add new prints for a ticker and settle any taker reality checks they decide."""
+        now_ts = now_ts or time.time()
+        buf = self.trade_buf.setdefault(ticker, deque(maxlen=3000))
+        known = {t["id"] for t in buf}
+        buf.extend(t for t in trades if t["id"] not in known)
+        for tk in [k for k in self.trade_buf if k != ticker and k not in self.test][:-1]:
+            del self.trade_buf[tk]
+        t = self.test.get(ticker)
+        pos = t.get("taker") if t else None
+        if not pos or pos.get("check") is not None or "ts" not in pos:
+            return
+        res = taker_check(pos, buf)
+        if res == "ok" or (res and now_ts > pos["ts"] + CHECK_AFTER):
+            pos["check"] = res
+        elif now_ts > pos["ts"] + CHECK_AFTER + 4:      # prints for the whole check period are in: decide
+            pos["check"] = res or "unknown"
+        self.dirty = True
+
+    def record_lag(self, lag):
+        self.lags.append(lag)
+
+    def freshness(self):
+        """How stale our copy of Kalshi's prices is, from recent trade prints."""
+        n = len(self.lags)
+        if n < 20:
+            return {"n": n}
+        seen = sorted(x for x in self.lags if x is not None)
+        # we fetch Kalshi once a second, so a print matched within 1 s is as fresh as this setup can be
+        return {"n": n, "within_1s": sum(1 for x in self.lags if x is not None and x <= 1) / n,
+                "within_3s": sum(1 for x in self.lags if x is not None and x <= 3) / n,
+                "never": sum(1 for x in self.lags if x is None) / n,
+                "median_lag": seen[len(seen) // 2] if seen else None}
 
     def settle(self, ticker, result, close_ts=None):
         """A window settled: score both variants and remember how the unfilled limit orders would have done."""
@@ -330,6 +411,12 @@ class ExecSim:
                     s["contracts_filled"] += pos["contracts"]
                 rec[lane] = {"side": pos["side"], "price": pos["price"], "n": pos["contracts"], "pnl": round(pnl, 4),
                              "fee": pos["fee"]}
+                if lane == "taker" and "ts" in pos:
+                    ck = pos.get("check") or "unknown"
+                    rec[lane]["check"] = ck
+                    self.checks[ck]["trades"] += 1
+                    self.checks[ck]["wins"] += 1 if won else 0
+                    self.checks[ck]["pnl"] += pnl
         if t.get("posted"):
             self.stats["maker"]["windows"] += 1
             if not t.get("maker"):
@@ -362,6 +449,21 @@ class ExecSim:
                         s[lane]["fees"] += p.get("fee", 0.0)
                 if r.get("maker_missed"):
                     s["maker"]["missed_" + r["maker_missed"]] += 1
+        if since_ts is None:
+            ck = json.loads(json.dumps(self.checks))
+        else:
+            ck = blank_checks()
+            for r in self.recent:
+                p = r.get("taker")
+                if r["close_ts"] >= since_ts and p and p.get("check"):
+                    c = ck[p["check"]]
+                    c["trades"] += 1
+                    c["wins"] += 1 if p["pnl"] > 0 else 0
+                    c["pnl"] += p["pnl"]
+        for c in ck.values():
+            c["per_trade"] = c["pnl"] / c["trades"] if c["trades"] else None
+        s["checks"] = ck
+        s["freshness"] = self.freshness()
         for lane in ("taker", "maker"):
             x = s[lane]
             x["per_trade"] = x["pnl"] / x["trades"] if x["trades"] else None

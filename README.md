@@ -200,6 +200,22 @@ how the unfilled orders would have done, and the daily summary includes the last
 ahead, set **Team order type** to *limit order (maker)* and the risk manager's own paper trades will rest the same way.
 **Maker fee multiplier** stays 0 unless Kalshi's fee schedule lists one for the series.
 
+**Reality check.** Our Kalshi prices are a copy fetched once a second, which can trail Kalshi's real order book. A copy
+that runs behind would make the taker results look better than they could ever be in practice, because it would
+"buy" at asks that were already gone. So two more measurements run alongside the execution test:
+
+* **Taker entries checked against real trades:** each taker entry is compared with Kalshi's actual trade prints over
+  the next 6 seconds and split into three groups, each with its own P&L.
+  * *confirmed*: someone really bought at our price or better.
+  * *price was gone*: trades only printed at worse prices.
+  * *couldn't tell*: there was no trading in those seconds.
+  Only the *confirmed* row is evidence of an edge you could actually trade.
+* **Kalshi data freshness:** every printed trade is compared with the quote we had at that second. A taker buy prints
+  at the real ask and a taker sell at the real bid, so this measures how many seconds our copy runs behind.
+  * *within 1 s* is as fresh as fetching once a second can be.
+  * A large *never* or a typical delay of several seconds means the copy is stale, and the lag agent may be learning
+    our own delay rather than Kalshi's.
+
 **Event calendar:** `events.json` lists Fed decision dates (marked high impact) and the recurring weekday times when
 US data comes out or stocks open. Add CPI and jobs-report dates as `"impact": "high"` and the team will sit out around
 them. The app re-reads the file every minute.

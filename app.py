@@ -30,6 +30,7 @@ Usage
 import argparse
 import asyncio
 import base64
+import bisect
 import hmac
 import csv
 import datetime as dt
@@ -81,6 +82,7 @@ WINDOW_SEC = 900             # 15 minutes (shortened in demo mode if asked)
 SEC_PER_YEAR = 365 * 24 * 3600
 DERIBIT_URL = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 DVOL_CURRENCIES = {"BTC": "BTC", "ETH": "ETH"}       # Deribit publishes DVOL for these; SOL borrows BTC's
+MAX_LAG_S = 15               # how far ahead to look when measuring how stale our Kalshi quotes are
 
 DEFAULT_CONFIG = {
     "composite": "median",       # median | mean of exchange mids
@@ -656,6 +658,10 @@ class Engine:
         self.exec = ExecSim(os.path.join(self.data_dir, "exec_sim.json"), self.window_sec)
         self._rv1h = (0, None)
         self._exec_saved = 0.0
+        self._trades_since = {}
+        self._fresh_queue = {}
+        self._fresh_ids = deque()            # trade ids already measured (oldest first) ...
+        self._fresh_seen = set()             # ... and the same ids for fast lookup
         self.clients = set()
         self.session = None
         self._csv_day = None
@@ -1313,16 +1319,56 @@ class Engine:
         if changed:
             save_json(self.paper_path, self.paper)
 
+    def quote_at(self, ticker, sec):
+        """The (bid, ask) we had for ticker at a given second, in dollars, or None."""
+        s = self.window_series.get(ticker)
+        if not s or not s["t"]:
+            return None
+        i = bisect.bisect_left(s["t"], sec)
+        if i >= len(s["t"]) or s["t"][i] != sec or s["yb"][i] is None or s["ya"][i] is None:
+            return None
+        return s["yb"][i] / 100, s["ya"][i] / 100
+
+    def measure_staleness(self, ticker):
+        """For prints old enough, how many seconds until our quote showed the price the trade printed at."""
+        latest = self.window_series.get(ticker, {}).get("t", [None])[-1] if self.window_series.get(ticker) else None
+        if latest is None:
+            return
+        keep = []
+        for tr in self._fresh_queue.get(ticker, []):
+            sec = int(tr["ts"])
+            if sec + MAX_LAG_S > latest:
+                keep.append(tr)              # wait until we have the quotes that follow it
+                continue
+            lag = None
+            for L in range(0, MAX_LAG_S + 1):
+                q = self.quote_at(ticker, sec + L)
+                if q is None:
+                    continue
+                ours = q[1] if tr["taker_side"] == "yes" else q[0]
+                if abs(ours - tr["yes_price"]) < 0.0051:
+                    lag = L
+                    break
+            if self.quote_at(ticker, sec) is not None:   # only score prints we had a quote for
+                self.exec.record_lag(lag)
+        self._fresh_queue[ticker] = keep[-2000:]
+        for tk in [k for k in self._fresh_queue if k != ticker][:-1]:
+            del self._fresh_queue[tk]
+
     async def trades_loop(self):
-        """While limit orders rest, read Kalshi's printed trades to see whether any would have filled them."""
+        """Read Kalshi's printed trades: fills for resting limit orders, the reality check of taker entries, and
+        how stale our copy of Kalshi's prices is."""
         while True:
             await asyncio.sleep(2)
             orders = self.exec.orders
-            if not orders:
+            current = (self.market or {}).get("ticker")
+            tickers = self.exec.needs_trades() | ({current} if current else set())
+            if not tickers:
                 continue
             mult = float(self.cfg.get("maker_fee_mult", 0) or 0)
-            for tk in sorted({o["ticker"] for o in orders}):
-                since = min(o["posted_ts"] for o in orders if o["ticker"] == tk)
+            for tk in sorted(tickers):
+                since = self._trades_since.get(tk) or min([o["posted_ts"] for o in orders if o["ticker"] == tk]
+                                                          + [now() - 30])
                 try:
                     if self.demo:
                         raw = self.world.trades(self.market if (self.market or {}).get("ticker") == tk else None,
@@ -1339,7 +1385,20 @@ class Engine:
                             if not cursor:
                                 break
                     trades = [t for t in (parse_trade(r, parse_ts) for r in raw) if t]
+                    new = [t for t in trades if t["id"] not in self._fresh_seen]
+                    for t in new:
+                        self._fresh_ids.append(t["id"])
+                        self._fresh_seen.add(t["id"])
+                    while len(self._fresh_ids) > 20000:
+                        self._fresh_seen.discard(self._fresh_ids.popleft())
                     self.apply_fills(self.exec.on_trades(tk, trades, mult))
+                    self.exec.check_takers(tk, trades)
+                    self._fresh_queue.setdefault(tk, []).extend(new)
+                    self.measure_staleness(tk)
+                    if trades:
+                        self._trades_since[tk] = max(t["ts"] for t in trades) - 5
+                    for k in [k for k in self._trades_since if k not in tickers]:
+                        del self._trades_since[k]
                     self.exec.trades_ok, self.exec.trades_err, self.exec.trades_ts = True, "", now()
                 except Exception as e:
                     self.exec.trades_ok, self.exec.trades_err = False, f"Kalshi trades: {e}"[:160]
@@ -1710,6 +1769,15 @@ class Hub:
                              f"limit {mk['trades']} fills ${mk['pnl']:+.2f}"
                              + (f" (unfilled would have won {mk['missed_win']}, lost {mk['missed_loss']})"
                                 if mk['missed_win'] or mk['missed_loss'] else ""))
+            ck, fr = x["checks"], x["freshness"]
+            n_ck = sum(c["trades"] for c in ck.values())
+            if n_ck:
+                lines.append(f"  reality check, last 7 days: {ck['ok']['trades']} of {n_ck} taker entries confirmed by real trades "
+                             f"(${ck['ok']['pnl']:+.2f}) · {ck['gone']['trades']} price already gone (${ck['gone']['pnl']:+.2f}) · "
+                             f"{ck['unknown']['trades']} couldn't tell (${ck['unknown']['pnl']:+.2f})")
+            if fr.get("median_lag") is not None:
+                lines.append(f"  Kalshi data freshness: {fr['within_1s'] * 100:.0f}% of real trades matched our price within 1 s, "
+                             f"{fr['within_3s'] * 100:.0f}% within 3 s, {fr['never'] * 100:.0f}% never; typical delay {fr['median_lag']} s")
         return "\n".join(lines)
 
     async def stop(self, app):

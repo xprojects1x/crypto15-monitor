@@ -644,13 +644,22 @@ function renderExec(X){
   const row = (name, sub, x) => `<tr><td class="agname"><b>${name}</b><span>${sub}</span></td><td>${x.trades}</td>
     <td>${x.win_rate!=null ? pct(x.win_rate) : '—'}</td><td class="${x.pnl>=0?'up':'down'}">${x.trades ? moneyS(x.pnl) : '—'}</td>
     <td class="${(x.per_trade||0)>=0?'up':'down'}">${x.per_trade!=null ? moneyS(x.per_trade) : '—'}</td><td>${x.fees!=null && x.trades ? money(x.fees) : '—'}</td></tr>`;
-  $('exBody').innerHTML = row('Taker', 'buy at the ask', t) + row('Limit', 'rest a bid, fill only if traded through', m);
+  const ck = S.checks || {}, sub = (name, hint, x) => x && x.trades ? `<tr class="muted"><td class="agname" style="padding-left:18px">↳ ${name}<span>${hint}</span></td><td>${x.trades}</td>
+    <td>${pct(x.wins/x.trades)}</td><td class="${x.pnl>=0?'up':'down'}">${moneyS(x.pnl)}</td><td class="${x.per_trade>=0?'up':'down'}">${moneyS(x.per_trade)}</td><td></td></tr>` : '';
+  $('exBody').innerHTML = row('Taker', 'buy at the ask', t)
+    + sub('confirmed', 'a real trade happened at our price', ck.ok)
+    + sub('price was gone', 'trades only printed at worse prices', ck.gone)
+    + sub('couldn\'t tell', 'no trades in the next few seconds', ck.unknown)
+    + row('Limit', 'rest a bid, fill only if traded through', m);
   const parts = [];
   if (EXV === 'all' && m.windows) parts.push(`Limit orders filled in ${pct(m.fill_rate,0)} of ${m.windows} windows where one was posted (${m.contract_fill_rate!=null ? pct(m.contract_fill_rate,0) : '—'} of contracts)`);
   if (m.missed_win || m.missed_loss) parts.push(`unfilled orders would have won ${m.missed_win} and lost ${m.missed_loss}`);
   const open = (X.open_orders||[]).filter(o => o.lane === 'test' || o.lane === 'paper');
   if (open.length) parts.push('resting now: ' + open.map(o => `${o.lane==='paper'?'team ':''}${o.side==='up'?'▲':'▼'} ${o.filled}/${o.contracts} at ${c(o.limit)}${o.queue_ahead>0?` (${Math.round(o.queue_ahead)} ahead)`:''}`).join(', '));
   if (!t.trades && !m.trades && !parts.length) parts.push('Nothing yet: entries need the team\'s edge to clear your minimum.');
+  const fr = X.freshness || {};
+  if (fr.median_lag != null) parts.push(`<b>Kalshi data freshness:</b> ${pct(fr.within_1s)} of real trades matched our price within 1 s (as fresh as once-a-second fetching gets), ${pct(fr.within_3s)} within 3 s, ${pct(fr.never)} never (out of ${fr.n}). Typical delay ${fr.median_lag} s`);
+  else if (fr.n != null) parts.push(`Kalshi data freshness: measuring (${fr.n} trades so far)`);
   $('exNote').innerHTML = parts.join(' · ');
   const f = X.trades_feed || {};
   $('exFeed').innerHTML = f.ok === false ? `<span class="down">trades feed: ${(f.error||'').replace(/</g,'&lt;')}</span>` : f.ok ? 'trades feed ✓' : '';
