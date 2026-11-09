@@ -527,7 +527,11 @@ function render(s){
         <td>${fmtUsd(pr.mid)}</td><td>${pr.dev==null?'—':fmtSigned(pr.dev)}</td><td>${pr.age==null?'—':pr.age+'s'}</td></tr>`; })() : '');
   const fl = s.flow || {}, pr = s.perp || {};
   const sgn = v => v==null ? '—' : `${v>=0?'+':'−'}${Math.abs(v*100).toFixed(0)}%`;
-  $('flowLine').innerHTML = `Taker flow 15s / 1m / 5m: <b class="num">${sgn(fl.tfi15)} / ${sgn(fl.tfi60)} / ${sgn(fl.tfi300)}</b> (positive = buyers)<br>
+  const kl = s.kalshi_live || {};
+  const klLine = !kl.configured ? `Kalshi prices: <span class="muted">fetched once a second${kl.error ? ' · ' + kl.error.replace(/</g,'&lt;') : ' (add a Kalshi API key for the live stream)'}</span><br>`
+    : kl.healthy ? `Kalshi live stream: <b class="up">connected</b> · order book ${kl.quotes_live ? 'live' + (kl.book_age!=null ? ` (last change ${kl.book_age}s ago)` : '') : 'loading'} · price used: <b class="num">${kl.spot_source || '—'}</b><br>`
+    : `Kalshi live stream: <span class="down">${(kl.error || 'connecting…').replace(/</g,'&lt;')}</span> · using once-a-second prices<br>`;
+  $('flowLine').innerHTML = klLine + `Taker flow 15s / 1m / 5m: <b class="num">${sgn(fl.tfi15)} / ${sgn(fl.tfi60)} / ${sgn(fl.tfi300)}</b> (positive = buyers)<br>
     Order book (Kraken top 10): <b class="num">${sgn(fl.book)}</b> bids vs asks · trades/min <b class="num">${fl.trades_per_min ?? '—'}</b><br>
     Futures premium <b class="num">${pr.premium!=null ? (pr.premium>=0?'+':'')+pr.premium.toFixed(3)+'%' : '—'}</b> · funding <b class="num">${pr.funding!=null ? (pr.funding*100).toFixed(4)+'%' : '—'}</b><br>
     ${(() => { const o = s.options || {};

@@ -200,6 +200,27 @@ how the unfilled orders would have done, and the daily summary includes the last
 ahead, set **Team order type** to *limit order (maker)* and the risk manager's own paper trades will rest the same way.
 **Maker fee multiplier** stays 0 unless Kalshi's fee schedule lists one for the series.
 
+**Kalshi's live data stream (recommended).** With a Kalshi API key, the monitor connects to Kalshi's live stream
+(`kalshi_ws.py`) instead of fetching Kalshi's prices once a second:
+* **the live order book and every trade**, the moment they change, so quotes are never stale;
+* **the official CF Benchmarks index** these markets settle on (`BRTI`, `ETHUSD_RTI`, `SOLUSD_RTI`, up to 5 updates
+  a second), used in place of the estimate built from exchange prices.
+
+The exchange feeds keep running for the flow, lead/lag and futures agents. If the stream drops, the monitor falls
+back to the old way by itself and sends an alert.
+
+The key is used only to sign the connection, which Kalshi requires even for market data, and nothing places orders.
+
+To set it up on the server:
+1. On kalshi.com, create an API key. Kalshi shows a **Key ID** and gives you the **private key** once.
+2. In the Droplet Console, run `bash /opt/crypto15/deploy/kalshi_key.sh` and paste both. It tests the key before
+   saving anything, stores it readable only by root and the monitor, and restarts the monitor.
+
+To stop using it, run `bash /opt/crypto15/deploy/kalshi_key.sh --remove`.
+
+On your own PC, put `KALSHI_API_KEY_ID=...` and `KALSHI_PRIVATE_KEY_PATH=C:\path\to\key.pem` in a `.env` file next
+to `app.py`.
+
 **Reality check.** Our Kalshi prices are a copy fetched once a second, which can trail Kalshi's real order book. A copy
 that runs behind would make the taker results look better than they could ever be in practice, because it would
 "buy" at asks that were already gone. So two more measurements run alongside the execution test:

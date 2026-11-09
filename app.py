@@ -16,6 +16,8 @@ What it does, for each coin
   * Reads options-implied volatility (Deribit DVOL for BTC and ETH) for the options agent.
   * Runs a team of learning agents (agents.py) that paper-trade only once they clearly beat Kalshi.
   * Tests limit ("maker") orders against buying at the ask on every window (execution.py).
+  * With a Kalshi API key (KALSHI_API_KEY_ID + KALSHI_PRIVATE_KEY_PATH), reads Kalshi's live stream instead
+    (kalshi_ws.py): the live order book and trades, and the official CF Benchmarks index these markets settle on.
   * Logs every second to CSV (compressed daily, old days pruned) for backtesting.
 
 It never places real orders and never needs your Kalshi keys.
@@ -53,6 +55,7 @@ from aiohttp import web
 from agents import Council, Events, build_ctx
 from alerts import Alerter, load_env_file
 from execution import ExecSim, parse_trade
+from kalshi_ws import KalshiStream
 from history import to_local
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,13 +63,13 @@ DATA_DIR = os.path.join(HERE, "data")
 STATIC_DIR = os.path.join(HERE, "static")
 
 ASSETS = {
-    "BTC": {"series": "KXBTC15M", "index": "BRTI", "coinbase": "BTC-USD", "kraken": "BTC/USD", "bitstamp": "btcusd",
+    "BTC": {"series": "KXBTC15M", "index": "BRTI", "cf_id": "BRTI", "coinbase": "BTC-USD", "kraken": "BTC/USD", "bitstamp": "btcusd",
             "gemini": "BTCUSD", "cryptocom": "BTC_USD", "perp": "PF_XBTUSD", "decimals": 2,
             "demo_price": 80000.0, "demo_lag": 0},
-    "ETH": {"series": "KXETH15M", "index": "ETHUSD RTI", "coinbase": "ETH-USD", "kraken": "ETH/USD", "bitstamp": "ethusd",
+    "ETH": {"series": "KXETH15M", "index": "ETHUSD RTI", "cf_id": "ETHUSD_RTI", "coinbase": "ETH-USD", "kraken": "ETH/USD", "bitstamp": "ethusd",
             "gemini": "ETHUSD", "cryptocom": "ETH_USD", "perp": "PF_ETHUSD", "decimals": 2,
             "demo_price": 2600.0, "demo_lag": 3},
-    "SOL": {"series": "KXSOL15M", "index": "SOLUSD RTI", "coinbase": "SOL-USD", "kraken": "SOL/USD", "bitstamp": "solusd",
+    "SOL": {"series": "KXSOL15M", "index": "SOLUSD RTI", "cf_id": "SOLUSD_RTI", "coinbase": "SOL-USD", "kraken": "SOL/USD", "bitstamp": "solusd",
             "gemini": "SOLUSD", "cryptocom": "SOL_USD", "perp": "PF_SOLUSD", "decimals": 4,
             "demo_price": 110.0, "demo_lag": 5},
 }
@@ -659,6 +662,8 @@ class Engine:
         self._rv1h = (0, None)
         self._exec_saved = 0.0
         self._trades_since = {}
+        self.quotes_live = False
+        self.spot_source = ""
         self._fresh_queue = {}
         self._fresh_ids = deque()            # trade ids already measured (oldest first) ...
         self._fresh_seen = set()             # ... and the same ids for fast lookup
@@ -1087,9 +1092,13 @@ class Engine:
                 self.market = new
                 self.market_err = "" if new else f"No open {self.series} market right now"
                 self.market_ts = t
+                self.live_quotes()
             except Exception as e:
                 self.market_err = f"Kalshi: {e}"[:200]
-            await asyncio.sleep(max(0.25, self.cfg["poll_ms"] / 1000))
+            ks = self.hub.kstream if self.hub else None
+            await asyncio.sleep(5 if (ks and ks.healthy() and self.quotes_live)
+                                else max(0.25, self.cfg["poll_ms"] / 1000))
+            self.live_quotes()
 
     def queue_settlement(self, mk):
         if mk["ticker"] in self.pending:
@@ -1336,6 +1345,11 @@ class Engine:
             return
         keep = []
         for tr in self._fresh_queue.get(ticker, []):
+            if "book_ask" in tr:             # live stream: compare with the book at the moment the trade arrived
+                ours = tr["book_ask"] if tr["taker_side"] == "yes" else tr["book_bid"]
+                if ours is not None:
+                    self.exec.record_lag(0 if abs(ours - tr["yes_price"]) < 0.0051 else None)
+                continue
             sec = int(tr["ts"])
             if sec + MAX_LAG_S > latest:
                 keep.append(tr)              # wait until we have the quotes that follow it
@@ -1359,7 +1373,8 @@ class Engine:
         """Read Kalshi's printed trades: fills for resting limit orders, the reality check of taker entries, and
         how stale our copy of Kalshi's prices is."""
         while True:
-            await asyncio.sleep(2)
+            ks = self.hub.kstream if self.hub and not self.demo else None
+            await asyncio.sleep(1 if ks and ks.healthy() else 2)
             orders = self.exec.orders
             current = (self.market or {}).get("ticker")
             tickers = self.exec.needs_trades() | ({current} if current else set())
@@ -1370,7 +1385,10 @@ class Engine:
                 since = self._trades_since.get(tk) or min([o["posted_ts"] for o in orders if o["ticker"] == tk]
                                                           + [now() - 30])
                 try:
-                    if self.demo:
+                    if ks and ks.healthy() and "trade" in ks.subs.get(tk, {}):
+                        trades = ks.pop_trades(tk)          # live prints from the stream
+                        raw = None
+                    elif self.demo:
                         raw = self.world.trades(self.market if (self.market or {}).get("ticker") == tk else None,
                                                 self.model.get("p_up"))
                     else:
@@ -1384,7 +1402,8 @@ class Engine:
                             cursor = data.get("cursor")
                             if not cursor:
                                 break
-                    trades = [t for t in (parse_trade(r, parse_ts) for r in raw) if t]
+                    if raw is not None:
+                        trades = [t for t in (parse_trade(r, parse_ts) for r in raw) if t]
                     new = [t for t in trades if t["id"] not in self._fresh_seen]
                     for t in new:
                         self._fresh_ids.append(t["id"])
@@ -1410,11 +1429,27 @@ class Engine:
             except RuntimeError:
                 pass
 
+    def live_quotes(self):
+        """Overwrite the polled quotes with Kalshi's live order book when the stream has it."""
+        ks = self.hub.kstream if self.hub else None
+        m = self.market
+        if not ks or not m or self.demo:
+            self.quotes_live = False
+            return
+        q = ks.quote(m["ticker"])
+        if not q:
+            self.quotes_live = False
+            return
+        m.update({k: q[k] for k in ("yes_bid", "yes_ask", "no_bid", "no_ask", "yes_bid_size", "yes_ask_size")})
+        self.quotes_live = True
+
     def health(self):
         """What the watchdog checks: live exchange feeds, fresh Kalshi data."""
         fresh = sum(1 for f in self.feeds.values() if f.fresh())
         age = now() - self.market_ts if self.market_ts else None
-        return {"feeds": fresh, "kalshi_ok": bool(self.market) and not self.market_err and age is not None and age < 30,
+        ks = self.hub.kstream if self.hub else None
+        return {"live_stream": (ks.healthy() if ks else None), "official_index": self.spot_source.startswith("official"),
+                "feeds": fresh, "kalshi_ok": bool(self.market) and not self.market_err and age is not None and age < 30,
                 "kalshi_err": self.market_err, "data_ok": bool(self.samples) and now() - self.samples[-1][0] < 30}
 
     # ----- sampling, logging, broadcast -----------------------------------------------
@@ -1426,7 +1461,16 @@ class Engine:
             if self.demo:
                 self.world.step(self.feeds, self.flow, self.perp)
             self.perp.sample(sec)
+            self.live_quotes()
             val, used, n = self.composite()
+            ks = self.hub.kstream if self.hub else None
+            idx = ks.index_value(self.spec["cf_id"]) if ks and not self.demo else None
+            if idx is not None:                # the official index itself: no estimating from exchanges needed
+                val, used = idx, dict(used, **{"CF index": idx})
+                n = max(n, 5)
+                self.spot_source = f"official {self.spec['index']} (live, via Kalshi)"
+            else:
+                self.spot_source = f"estimated from {n} exchange{'s' if n != 1 else ''}"
             if val is not None:
                 self.samples.append((sec, val, n, used))
                 self.sample_idx[sec] = val
@@ -1534,6 +1578,14 @@ class Engine:
             "overview": self.hub.overview() if self.hub else [],
             "alerts": self.hub.alerter.status() if self.hub else None,
             "flow": self.flow.stats(), "perp": self.perp.to_dict(comp),
+            "kalshi_live": {"configured": bool(self.hub and self.hub.kstream), "quotes_live": self.quotes_live,
+                            "spot_source": self.spot_source,
+                            "error": (self.hub.kstream.error if self.hub and self.hub.kstream else
+                                      (self.hub.kstream_err if self.hub else "")),
+                            "healthy": bool(self.hub and self.hub.kstream and self.hub.kstream.healthy()),
+                            "book_age": (round(now() - self.hub.kstream.books[self.market["ticker"]]["ts"], 1)
+                                         if self.hub and self.hub.kstream and self.market
+                                         and self.market["ticker"] in self.hub.kstream.books else None)},
             "options": {"source": self.model.get("iv_source"), "iv_ratio": self.model.get("iv_ratio"),
                         "p_iv": self.model.get("p_iv"),
                         "error": "" if self.demo or not self.hub else self.hub.optvol.error},
@@ -1589,6 +1641,13 @@ class Hub:
         self.events = Events(os.path.join(HERE, "events.json"), to_local)
         self._common = {}
         self.optvol = OptionsVol()
+        self.kstream, self.kstream_err = None, ""
+        kid, kpath = os.environ.get("KALSHI_API_KEY_ID", "").strip(), os.environ.get("KALSHI_PRIVATE_KEY_PATH", "").strip()
+        if kid and kpath and not demo:
+            try:
+                self.kstream = KalshiStream(kid, kpath, index_ids=[ASSETS[a]["cf_id"] for a in assets])
+            except Exception as e:
+                self.kstream_err = f"Kalshi API key not usable: {e}"[:200]
         self.engines = {a: Engine(a, self, demo, demo_window) for a in self.assets}
         self.session = None
         self.alerter = Alerter()
@@ -1602,6 +1661,20 @@ class Hub:
             for old in [k for k in self._common if k < sec - 120]:
                 del self._common[old]
         return self._common[sec]
+
+    async def kstream_watch(self):
+        """Keep the live stream subscribed to each coin's current market (and any with resting orders or pending checks)."""
+        while True:
+            await asyncio.sleep(2)
+            try:
+                tks = set()
+                for e in self.engines.values():
+                    if e.market:
+                        tks.add(e.market["ticker"])
+                    tks |= e.exec.needs_trades()
+                await self.kstream.watch(tks)
+            except Exception as ex:
+                self.kstream.error = f"Kalshi stream subscriptions: {ex}"[:200]
 
     def cross(self, asset, secs_left):
         me = self.engines[asset].norm_returns()
@@ -1641,6 +1714,8 @@ class Hub:
         coros.append(self.events_loop())
         if not self.demo:
             coros.append(deribit_loop(self.session, self.optvol))
+        if self.kstream:
+            coros += [self.kstream.run(self.session), self.kstream_watch()]
         self.alerter.session = self.session
         coros.append(self.watch_loop())
         app["tasks"] = [asyncio.create_task(c) for c in coros]
@@ -1686,6 +1761,14 @@ class Hub:
                     w["alerted"].discard(key)
                 w["down_since"].pop(key, None)
 
+        if self.kstream:
+            await condition("kstream", not self.kstream.healthy(), 5,
+                            f"⚠ Kalshi live stream down for 5+ minutes ({self.kstream.error or 'no data'}). "
+                            "Falling back to once-a-second prices and the estimated index.",
+                            "✓ Kalshi live stream connected again")
+        elif self.kstream_err and not w.get("kstream_err_sent"):
+            w["kstream_err_sent"] = True
+            await send(f"⚠ {self.kstream_err}. Using once-a-second prices until it's fixed.", cooldown=0)
         for a, e in self.engines.items():
             h = e.health()
             await condition(f"{a}:feeds", h["feeds"] < e.cfg["min_feeds"], 5,
