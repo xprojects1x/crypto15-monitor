@@ -16,6 +16,16 @@ Execution test (always on, from day one, no proof needed)
 Team paper orders (setting order_type = "maker")
   The risk manager's own paper trades rest as limit orders in the same way, instead of buying at the ask.
 
+Late entries (the final 2 minutes)
+  These markets settle on the average of the index over the last 60 seconds, so in the final minutes part of the
+  answer is already locked in. The normal rules never enter then; the "late" lane is a separate taker test from
+  120 s to 3 s before the close (same edge rule, fees, size and reality check), kept apart from everything else.
+
+Entry log (for the edge finder)
+  Every settled taker entry (normal and late) is appended to <coin data>/exec_entries.jsonl with its context:
+  seconds left, claimed edge, price, distance from the price to beat, volatility, hour, how many active agents
+  agreed, the reality-check result, the outcome and P&L. edgefinder.py looks for groups that held up in both halves.
+
 Reality check (are the prices we see real?)
   Our Kalshi prices are a copy fetched once a second, which can trail Kalshi's real order book. So:
     * every taker entry is checked against Kalshi's actual trade prints in the next few seconds: did anyone really
@@ -116,6 +126,7 @@ def taker_check(pos, trades):
 
 def blank_stats():
     return {"taker": {"trades": 0, "wins": 0, "pnl": 0.0, "fees": 0.0, "contracts": 0},
+            "late": {"trades": 0, "wins": 0, "pnl": 0.0, "fees": 0.0, "contracts": 0},
             "maker": {"orders": 0, "windows": 0, "trades": 0, "wins": 0, "pnl": 0.0, "fees": 0.0,
                       "contracts_posted": 0, "contracts_filled": 0, "cancelled": 0,
                       "missed_win": 0, "missed_loss": 0}}
@@ -135,6 +146,8 @@ class ExecSim:
         self.trades_err = ""
         self.trades_ts = 0.0
         self.checks = blank_checks()           # taker P&L split by reality-check result
+        self.checks_late = blank_checks()      # the same for the late lane
+        self.log_path = os.path.join(os.path.dirname(path) or ".", "exec_entries.jsonl")
         self.lags = deque(maxlen=3000)         # per printed trade: seconds until our quote showed its price (None = never)
         self.trade_buf = {}                    # ticker -> recent parsed trades (for the reality check)
         self.dirty = False
@@ -160,19 +173,23 @@ class ExecSim:
         for k in ck:
             ck[k].update((d.get("checks") or {}).get(k, {}))
         self.checks = ck
+        ckl = blank_checks()
+        for k in ckl:
+            ckl[k].update((d.get("checks_late") or {}).get(k, {}))
+        self.checks_late = ckl
         self.lags = deque(d.get("lags", []), maxlen=3000)
 
     def save(self):
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"orders": self.orders, "test": self.test, "stats": self.stats, "checks": self.checks,
-                       "lags": list(self.lags), "recent": list(self.recent), "since": self.since}, f)
+                       "checks_late": self.checks_late, "lags": list(self.lags), "recent": list(self.recent), "since": self.since}, f)
         os.replace(tmp, self.path)
         self.dirty = False
 
     def reset_test(self):
         self.test, self.stats, self.recent, self.since = {}, blank_stats(), deque(maxlen=1500), time.time()
-        self.checks, self.lags = blank_checks(), deque(maxlen=3000)
+        self.checks, self.checks_late, self.lags = blank_checks(), blank_checks(), deque(maxlen=3000)
         self.orders = [o for o in self.orders if o["lane"] != "test"]
         self.save()
 
@@ -295,12 +312,36 @@ class ExecSim:
 
     # ----- the always-on execution test ------------------------------------------------
 
-    def evaluate(self, ctx, p_team, cfg, scale=1.0):
-        """Called every second: enter the taker variant and post the limit variant when their edge is there."""
+    def _taker_entry(self, ctx, p_team, cfg, C, info):
+        """The best side to buy at the ask if its edge after fees reaches min_edge, else None."""
+        best = None
+        mk = {"yes_ask": ctx.get("yes_ask"), "no_ask": ctx.get("no_ask"), "yes_bid": ctx.get("yes_bid"), "no_bid": ctx.get("no_bid")}
+        for side, prob in (("up", p_team), ("down", 1 - p_team)):
+            _, ask, _ = side_quotes(mk, side)
+            if ask is None:
+                continue
+            fee = taker_fee_total(ask, C)
+            ev = prob - ask - fee / C
+            if ev >= cfg["min_edge"] and (best is None or ev > best[3]):
+                best = (side, ask, fee, ev)
+        if not best:
+            return None
+        cx = dict(info or {}, secs_left=round(ctx["secs_left"], 1), ev=round(best[3], 4), spread=ctx.get("spread"))
+        ag = (info or {}).get("agent_probs") or {}
+        if ag:                                  # how many active agents agreed this side beats its price
+            yes = [p for p in ag.values() if (p > best[1] if best[0] == "up" else 1 - p > best[1])]
+            cx["agree"] = round(len(yes) / len(ag), 3)
+        cx.pop("agent_probs", None)
+        return {"side": best[0], "price": best[1], "contracts": C, "fee": best[2], "ev": best[3],
+                "ts": time.time(), "check": None, "ctx": cx}
+
+    def evaluate(self, ctx, p_team, cfg, scale=1.0, info=None):
+        """Called every second: enter the taker variant and post the limit variant when their edge is there;
+        in the final 2 minutes, the separate late lane instead."""
         if not ctx or p_team is None:
             return
         tk, secs = ctx["ticker"], ctx["secs_left"]
-        if secs <= cfg["no_entry_last_sec"] * scale or (ctx.get("n_feeds") or 0) < cfg["min_feeds"]:
+        if (ctx.get("n_feeds") or 0) < cfg["min_feeds"]:
             return
         if ctx.get("spread") is not None and ctx["spread"] > cfg["max_spread"] + 1e-9:
             return
@@ -313,22 +354,22 @@ class ExecSim:
             self.dirty = True
         t = self.test.setdefault(tk, {"taker": None, "maker": None})
         t.setdefault("t0", time.time())
+        if secs <= cfg["no_entry_last_sec"] * scale:          # the final minutes: only the late lane
+            late_from = cfg.get("late_test_from_sec", 120) * scale
+            late_until = cfg.get("late_test_until_sec", 3) * scale
+            if cfg.get("late_test", True) and late_until < secs <= late_from and t.get("late") is None:
+                pos = self._taker_entry(ctx, p_team, cfg, C, info)
+                if pos:
+                    t["late"] = pos
+                    self.dirty = True
+            return
         mk = {"ticker": tk, "close_ts": None, "yes_bid": ctx.get("yes_bid"), "yes_ask": ctx.get("yes_ask"),
               "no_bid": ctx.get("no_bid"), "no_ask": ctx.get("no_ask"),
               "yes_bid_size": ctx.get("yes_bid_size"), "yes_ask_size": ctx.get("yes_ask_size")}
         if t.get("taker") is None:
-            best = None
-            for side, prob in (("up", p_team), ("down", 1 - p_team)):
-                _, ask, _ = side_quotes(mk, side)
-                if ask is None:
-                    continue
-                fee = taker_fee_total(ask, C)
-                ev = prob - ask - fee / C
-                if ev >= cfg["min_edge"] and (best is None or ev > best[3]):
-                    best = (side, ask, fee, ev)
-            if best:
-                t["taker"] = {"side": best[0], "price": best[1], "contracts": C, "fee": best[2], "ev": best[3],
-                              "ts": time.time(), "check": None}
+            pos = self._taker_entry(ctx, p_team, cfg, C, info)
+            if pos:
+                t["taker"] = pos
                 self.dirty = True
         if t.get("maker") is None and not self.open_orders(tk, "test"):
             best = None
@@ -347,7 +388,8 @@ class ExecSim:
     def needs_trades(self):
         """Tickers whose trade prints are still needed: resting orders, or taker entries not yet checked."""
         tks = {o["ticker"] for o in self.orders}
-        tks |= {tk for tk, t in self.test.items() if t.get("taker") and t["taker"].get("check") is None}
+        tks |= {tk for tk, t in self.test.items()
+                if any(t.get(l) and t[l].get("check") is None for l in ("taker", "late"))}
         return tks
 
     def check_takers(self, ticker, trades, now_ts=None):
@@ -359,15 +401,16 @@ class ExecSim:
         for tk in [k for k in self.trade_buf if k != ticker and k not in self.test][:-1]:
             del self.trade_buf[tk]
         t = self.test.get(ticker)
-        pos = t.get("taker") if t else None
-        if not pos or pos.get("check") is not None or "ts" not in pos:
-            return
-        res = taker_check(pos, buf)
-        if res == "ok" or (res and now_ts > pos["ts"] + CHECK_AFTER):
-            pos["check"] = res
-        elif now_ts > pos["ts"] + CHECK_AFTER + 4:      # prints for the whole check period are in: decide
-            pos["check"] = res or "unknown"
-        self.dirty = True
+        for lane in ("taker", "late"):
+            pos = t.get(lane) if t else None
+            if not pos or pos.get("check") is not None or "ts" not in pos:
+                continue
+            res = taker_check(pos, buf)
+            if res == "ok" or (res and now_ts > pos["ts"] + CHECK_AFTER):
+                pos["check"] = res
+            elif now_ts > pos["ts"] + CHECK_AFTER + 4:      # prints for the whole check period are in: decide
+                pos["check"] = res or "unknown"
+            self.dirty = True
 
     def record_lag(self, lag):
         self.lags.append(lag)
@@ -395,7 +438,7 @@ class ExecSim:
             return
         y = result == "yes"
         rec = {"ticker": ticker, "close_ts": close_ts or time.time(), "result": result}
-        for lane in ("taker", "maker"):
+        for lane in ("taker", "late", "maker"):
             pos = t.get(lane)
             s = self.stats[lane]
             if pos:
@@ -405,18 +448,20 @@ class ExecSim:
                 s["wins"] += 1 if won else 0
                 s["pnl"] += pnl
                 s["fees"] += pos["fee"]
-                if lane == "taker":
+                if lane in ("taker", "late"):
                     s["contracts"] += pos["contracts"]
                 else:
                     s["contracts_filled"] += pos["contracts"]
                 rec[lane] = {"side": pos["side"], "price": pos["price"], "n": pos["contracts"], "pnl": round(pnl, 4),
                              "fee": pos["fee"]}
-                if lane == "taker" and "ts" in pos:
+                if lane in ("taker", "late") and "ts" in pos:
                     ck = pos.get("check") or "unknown"
                     rec[lane]["check"] = ck
-                    self.checks[ck]["trades"] += 1
-                    self.checks[ck]["wins"] += 1 if won else 0
-                    self.checks[ck]["pnl"] += pnl
+                    book = self.checks if lane == "taker" else self.checks_late
+                    book[ck]["trades"] += 1
+                    book[ck]["wins"] += 1 if won else 0
+                    book[ck]["pnl"] += pnl
+                    self._log_entry(lane, ticker, pos, result, won, pnl, ck)
         if t.get("posted"):
             self.stats["maker"]["windows"] += 1
             if not t.get("maker"):
@@ -429,6 +474,16 @@ class ExecSim:
             self.recent.append(rec)
         self.dirty = True
 
+    def _log_entry(self, lane, ticker, pos, result, won, pnl, check):
+        row = {"ts": round(pos["ts"], 1), "lane": lane, "ticker": ticker, "side": pos["side"], "price": pos["price"],
+               "n": pos["contracts"], "fee": pos["fee"], "result": result, "won": won, "pnl": round(pnl, 4),
+               "check": check, **(pos.get("ctx") or {})}
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+        except OSError:
+            pass
+
     # ----- reporting ---------------------------------------------------------------------
 
     def summary(self, since_ts=None):
@@ -440,7 +495,7 @@ class ExecSim:
             for r in self.recent:
                 if r["close_ts"] < since_ts:
                     continue
-                for lane in ("taker", "maker"):
+                for lane in ("taker", "late", "maker"):
                     p = r.get(lane)
                     if p:
                         s[lane]["trades"] += 1
@@ -449,22 +504,23 @@ class ExecSim:
                         s[lane]["fees"] += p.get("fee", 0.0)
                 if r.get("maker_missed"):
                     s["maker"]["missed_" + r["maker_missed"]] += 1
-        if since_ts is None:
-            ck = json.loads(json.dumps(self.checks))
-        else:
-            ck = blank_checks()
-            for r in self.recent:
-                p = r.get("taker")
-                if r["close_ts"] >= since_ts and p and p.get("check"):
-                    c = ck[p["check"]]
-                    c["trades"] += 1
-                    c["wins"] += 1 if p["pnl"] > 0 else 0
-                    c["pnl"] += p["pnl"]
-        for c in ck.values():
-            c["per_trade"] = c["pnl"] / c["trades"] if c["trades"] else None
-        s["checks"] = ck
+        for lane, key, source in (("taker", "checks", self.checks), ("late", "checks_late", self.checks_late)):
+            if since_ts is None:
+                ck = json.loads(json.dumps(source))
+            else:
+                ck = blank_checks()
+                for r in self.recent:
+                    p = r.get(lane)
+                    if r["close_ts"] >= since_ts and p and p.get("check"):
+                        c = ck[p["check"]]
+                        c["trades"] += 1
+                        c["wins"] += 1 if p["pnl"] > 0 else 0
+                        c["pnl"] += p["pnl"]
+            for c in ck.values():
+                c["per_trade"] = c["pnl"] / c["trades"] if c["trades"] else None
+            s[key] = ck
         s["freshness"] = self.freshness()
-        for lane in ("taker", "maker"):
+        for lane in ("taker", "late", "maker"):
             x = s[lane]
             x["per_trade"] = x["pnl"] / x["trades"] if x["trades"] else None
             x["win_rate"] = x["wins"] / x["trades"] if x["trades"] else None

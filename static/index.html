@@ -185,6 +185,11 @@ footer{grid-column:1/-1;color:var(--muted);font-size:12px;line-height:1.5}
           <tbody id="exBody"></tbody>
         </table></div>
         <div class="muted" id="exNote" style="font-size:12px;margin-top:6px"></div>
+        <details id="efBox" style="margin-top:10px"><summary>Edge finder: is any kind of entry profitable for real?</summary>
+          <p class="muted" style="font-size:12px;margin:6px 0">Confirmed taker entries only (a real trade happened at our price), split by their context. A group <b>holds up</b> only with at least 40 entries, a profit per contract after fees beyond twice its error band, and a profit in both the first and second half of its entries. Many groups are tested, so a few can pass by luck: treat one pass as a lead, not proof.</p>
+          <div id="efSum" style="font-size:13px;margin-bottom:6px"></div>
+          <div class="tablewrap"><table><thead><tr><th style="text-align:left">Group</th><th>Entries</th><th>¢ per contract</th><th>1st half</th><th>2nd half</th><th></th></tr></thead><tbody id="efBody"></tbody></table></div>
+        </details>
       </div>
     </section>
 
@@ -578,6 +583,7 @@ function render(s){
 
   renderTeam(s);
   renderExec(s.execution);
+  renderEdges(s.edges);
   renderAlerts(s.alerts);
   fillConfig(s.config);
   drawCharts(s);
@@ -654,7 +660,10 @@ function renderExec(X){
     + sub('confirmed', 'a real trade happened at our price', ck.ok)
     + sub('price was gone', 'trades only printed at worse prices', ck.gone)
     + sub('couldn\'t tell', 'no trades in the next few seconds', ck.unknown)
-    + row('Limit', 'rest a bid, fill only if traded through', m);
+    + row('Limit', 'rest a bid, fill only if traded through', m)
+    + (S.late && S.late.trades ? row('Late', 'taker, final 2 minutes only', S.late)
+        + sub('confirmed', 'a real trade happened at our price', (S.checks_late||{}).ok)
+        + sub('price was gone', 'trades only printed at worse prices', (S.checks_late||{}).gone) : '');
   const parts = [];
   if (EXV === 'all' && m.windows) parts.push(`Limit orders filled in ${pct(m.fill_rate,0)} of ${m.windows} windows where one was posted (${m.contract_fill_rate!=null ? pct(m.contract_fill_rate,0) : '—'} of contracts)`);
   if (m.missed_win || m.missed_loss) parts.push(`unfilled orders would have won ${m.missed_win} and lost ${m.missed_loss}`);
@@ -670,6 +679,20 @@ function renderExec(X){
 }
 document.addEventListener('click', e => { const b = e.target.closest('#exTabs [data-ex]'); if (!b) return;
   EXV = b.dataset.ex; try { localStorage.setItem('c15ex', EXV); } catch(err){} if (lastExec) renderExec(lastExec); });
+
+function renderEdges(E){
+  if (!E) { $('efSum').textContent = 'No settled entries yet.'; $('efBody').innerHTML = ''; return; }
+  if (E.error) { $('efSum').textContent = 'Edge finder error: ' + E.error; return; }
+  const cents = v => v==null ? '—' : (v>=0?'+':'') + (v*100).toFixed(1) + '¢';
+  const lane = l => l === 'late' ? 'Late · ' : '';
+  $('efSum').innerHTML = E.holds && E.holds.length
+    ? `<b class="up">${E.holds.length} of ${E.tested} groups hold up</b> (luck alone would pass about ${E.expected_by_luck}). ${E.confirmed} confirmed of ${E.entries} settled entries.`
+    : `No group holds up yet. ${E.tested} groups tested with ${E.min_n}+ entries; ${E.confirmed} confirmed of ${E.entries} settled entries.`;
+  const rows = [...(E.overall||[]), ...(E.top||[]).filter(g => g.dimension !== 'all entries')];
+  $('efBody').innerHTML = rows.map(g => `<tr><td class="agname" style="text-align:left"><b>${lane(g.lane)}${g.dimension === 'all entries' ? 'All confirmed entries' : g.dimension + ': ' + g.bucket}</b></td>
+    <td>${g.n}</td><td class="${g.mean>=0?'up':'down'}">${cents(g.mean)} <span class="muted">±${(g.band*100).toFixed(1)}</span></td>
+    <td>${cents(g.first_half)}</td><td>${cents(g.second_half)}</td><td>${g.holds ? '<b class="up">holds</b>' : (g.n < E.min_n ? '<span class="muted">too few</span>' : '')}</td></tr>`).join('');
+}
 
 // ---------- alerts ----------
 function renderAlerts(A){

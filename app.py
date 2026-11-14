@@ -56,6 +56,7 @@ from agents import Council, Events, build_ctx
 from alerts import Alerter, load_env_file
 from execution import ExecSim, parse_trade
 from kalshi_ws import KalshiStream
+import edgefinder
 from history import to_local
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -116,6 +117,9 @@ DEFAULT_CONFIG = {
     "keep_days": 90,             # days of per-second tick logs to keep (older ones are deleted)
     "order_type": "taker",       # team paper trades: "taker" buys at the ask; "maker" rests a limit order
     "maker_fee_mult": 0.0,       # Kalshi maker-fee multiplier for this series (0 unless its fee schedule lists one)
+    "late_test": True,           # execution test: also try taker entries in the final minutes (paper, separate lane)
+    "late_test_from_sec": 120,   # ...from this many seconds before the close
+    "late_test_until_sec": 3,    # ...until this many seconds before the close
 }
 
 
@@ -664,6 +668,7 @@ class Engine:
         self._trades_since = {}
         self.quotes_live = False
         self.spot_source = ""
+        self._edges = (0.0, None, 0.0)
         self._fresh_queue = {}
         self._fresh_ids = deque()            # trade ids already measured (oldest first) ...
         self._fresh_seen = set()             # ... and the same ids for fast lookup
@@ -1296,12 +1301,51 @@ class Engine:
             scale = self.window_sec / WINDOW_SEC
             self.exec.manage(m["ticker"], p_team, secs, cfg, cfg["no_entry_last_sec"] * scale)
             self.apply_fills(self.exec.on_book(m, float(cfg.get("maker_fee_mult", 0) or 0)))
-            self.exec.evaluate(ctx, p_team, cfg, scale)
+            self.exec.evaluate(ctx, p_team, cfg, scale, self.entry_info(f))
             if self.exec.dirty and now() - self._exec_saved > 10:
                 self.exec.save()
                 self._exec_saved = now()
         except Exception as e:             # never let the execution test take the monitor down
             self.exec.trades_err = f"execution test: {e}"[:160]
+
+    def edges_brief(self):
+        r = self.edges()
+        if not r or r.get("error"):
+            return r
+        keep = ("lane", "dimension", "bucket", "n", "mean", "band", "first_half", "second_half", "holds", "win_rate")
+        top = [{k: g.get(k) for k in keep} for g in r["groups"] if g["n"] >= 10][:10]
+        return {"tested": r["tested"], "holds": [{k: g.get(k) for k in keep} for g in r["holds"]], "top": top,
+                "overall": [{k: g.get(k) for k in keep + ("all_n",)} for g in r["groups"] if g["dimension"] == "all entries"],
+                "expected_by_luck": r["expected_by_luck"], "entries": r["entries"], "confirmed": r["confirmed"],
+                "min_n": r["min_n"]}
+
+    def entry_info(self, f):
+        """Context saved with each execution-test entry, for the edge finder."""
+        md = self.model or {}
+        info = {"p_model": md.get("p_up"), "sigma": md.get("sigma"), "in_settle": md.get("in_settle")}
+        if md.get("settle_mean") is not None and md.get("strike") is not None and md.get("settle_sd"):
+            info["z"] = round((md["settle_mean"] - md["strike"]) / md["settle_sd"], 3)
+        lt = to_local(now(), "ET")
+        info["hour_et"] = round(lt.hour + lt.minute / 60, 2)
+        if f and f.get("preds"):
+            info["agent_probs"] = {k: v[0] for k, v in f["preds"].items()
+                                   if self.council.status.get(k) == "active" and v and v[0] is not None}
+        if f:
+            info["p_team"] = round(f["p_team"], 4)
+        return info
+
+    def edges(self):
+        """Edge-finder report on this coin's settled entries (recomputed when new ones arrive, at most once a minute)."""
+        try:
+            mtime = os.path.getmtime(self.exec.log_path)
+        except OSError:
+            mtime = 0.0
+        if self._edges[1] is None or (mtime != self._edges[2] and now() - self._edges[0] > 60):
+            try:
+                self._edges = (now(), edgefinder.analyze(edgefinder.load(self.exec.log_path)), mtime)
+            except Exception as e:
+                self._edges = (now(), {"error": str(e)[:160]}, mtime)
+        return self._edges[1]
 
     def apply_fills(self, events):
         """Filled team limit orders become (or add to) team paper positions."""
@@ -1590,6 +1634,7 @@ class Engine:
                         "p_iv": self.model.get("p_iv"),
                         "error": "" if self.demo or not self.hub else self.hub.optvol.error},
             "execution": dict(self.exec.summary(), week=self.exec.summary(now() - 7 * 86400)),
+            "edges": self.edges_brief(),
             "config": self.cfg, "feeds": [f.to_dict(comp, n in used) for n, f in self.feeds.items()],
             "market": m, "market_err": self.market_err, "market_age": now() - self.market_ts if self.market_ts else None,
             "model": self.model, "signal": self.signal, "calibration": self.calibration(),
@@ -1852,6 +1897,21 @@ class Hub:
                              f"limit {mk['trades']} fills ${mk['pnl']:+.2f}"
                              + (f" (unfilled would have won {mk['missed_win']}, lost {mk['missed_loss']})"
                                 if mk['missed_win'] or mk['missed_loss'] else ""))
+            lt_ = x["late"]
+            if lt_["trades"]:
+                cl = x["checks_late"]
+                lines.append(f"  late entries (last 2 min), last 7 days: {lt_['trades']} trades ${lt_['pnl']:+.2f} · "
+                             f"confirmed {cl['ok']['trades']} (${cl['ok']['pnl']:+.2f})")
+            ef = e.edges()
+            if ef and not ef.get("error") and ef.get("tested"):
+                if ef["holds"]:
+                    best = ef["holds"][0]
+                    lines.append(f"  edge finder: {len(ef['holds'])} of {ef['tested']} groups hold up (luck alone ≈ "
+                                 f"{ef['expected_by_luck']}); best: {best['lane']} · {best['dimension']} = {best['bucket']} "
+                                 f"{best['mean'] * 100:+.1f}¢/contract (n={best['n']})")
+                else:
+                    lines.append(f"  edge finder: none of {ef['tested']} groups holds up yet "
+                                 f"({ef['confirmed']} confirmed entries so far)")
             ck, fr = x["checks"], x["freshness"]
             n_ck = sum(c["trades"] for c in ck.values())
             if n_ck:

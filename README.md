@@ -221,6 +221,29 @@ To stop using it, run `bash /opt/crypto15/deploy/kalshi_key.sh --remove`.
 On your own PC, put `KALSHI_API_KEY_ID=...` and `KALSHI_PRIVATE_KEY_PATH=C:\path\to\key.pem` in a `.env` file next
 to `app.py`.
 
+**Late entries and the edge finder.** The normal rules never enter in the last 2 minutes, but that's where the
+system's structural advantage is largest: settlement is the average of the official index over the final 60 seconds,
+part of that average is already locked in, and the monitor computes it exactly from the live index. So the execution
+test also runs a separate **late** taker lane from 120 to 3 seconds before the close (settings `late_test`,
+`late_test_from_sec`, `late_test_until_sec`). It uses the same edge rule, fees, size and reality check, and it's paper
+only and kept apart from everything else.
+
+Every settled taker entry is saved with its context to `exec_entries.jsonl` in the coin's data folder:
+* seconds left, claimed edge, price;
+* distance from the price to beat (in settlement standard deviations), volatility, hour (ET);
+* the share of active agents that agreed, the reality-check result, the outcome and P&L.
+
+The **edge finder** (`edgefinder.py`, and *Edge finder* in the dashboard's Execution test panel) splits the confirmed
+entries into groups by that context and asks whether any group made money for real. A group *holds up* only if all
+three are true:
+* it has at least 40 confirmed entries;
+* its profit per contract after fees is more than twice its error band;
+* it was profitable in both the first and the second half of its entries.
+
+About 50 groups are tested, so roughly one can pass by luck alone. The report says so, and a single pass is a lead to
+watch, not proof. You can also run it by hand: `python edgefinder.py data/exec_entries.jsonl` (ETH and SOL logs are in
+`data/eth`, `data/sol`).
+
 **Reality check.** Our Kalshi prices are a copy fetched once a second, which can trail Kalshi's real order book. A copy
 that runs behind would make the taker results look better than they could ever be in practice, because it would
 "buy" at asks that were already gone. So two more measurements run alongside the execution test:
@@ -328,6 +351,7 @@ Each window's price to beat and settlement value are official 60-second averages
 * `windows.json`: every settled window with Kalshi's strike and settlement value next to ours.
 * `paper_trades.json`: open and closed paper trades.
 * `exec_sim.json`: the execution test (taker vs limit orders) and any resting team limit orders.
+* `exec_entries.jsonl`: every settled execution-test taker entry with its context, for the edge finder.
 * `config.json`: your saved settings.
 * `history/`: `windows.csv` (one row per settled window), `daily.csv`, `hourly.csv`, `weekday.csv`, `summary.json`, `report.html`, and `candles.jsonl` (cached Kalshi prices).
 
