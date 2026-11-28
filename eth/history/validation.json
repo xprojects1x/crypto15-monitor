@@ -1,0 +1,231 @@
+{
+ "generated_utc": "2026-11-28T10:13:41+00:00",
+ "windows": 32969,
+ "counts": {
+  "PASS": 4,
+  "WARN": 2,
+  "INFO": 6
+ },
+ "checks": [
+  {
+   "name": "No duplicate windows",
+   "status": "PASS",
+   "detail": "32,969 windows, 0 duplicate tickers, 0 duplicate close times"
+  },
+  {
+   "name": "Complete 15-minute schedule",
+   "status": "WARN",
+   "detail": "872 windows missing in 56 gaps (largest: 68 after 2025-12-13 05:00 UTC; 65 after 2025-12-30 09:00 UTC; 50 after 2025-12-29 08:30 UTC). Usually exchange downtime or markets Kalshi voided; rerun history.py to fill recent ones."
+  },
+  {
+   "name": "Result matches settlement \u2265 price to beat",
+   "status": "PASS",
+   "detail": "all 30,104 checkable windows agree; 2865 windows lack a price to beat or settlement"
+  },
+  {
+   "name": "Chain: price to beat = previous settlement",
+   "status": "PASS",
+   "detail": "30,063 of 30,063 back-to-back pairs match exactly (100.00%)"
+  },
+  {
+   "name": "Prices are sane",
+   "status": "WARN",
+   "detail": "price to beat ranges $1,520.32\u2013$3,386.25; 10 windows moved more than 3% in 15 minutes; 2865 missing or zero values"
+  },
+  {
+   "name": "Independent price source (Coinbase)",
+   "status": "PASS",
+   "detail": "Coinbase agreed on direction in 95.7% of 94 sampled windows and 100.0% of those that finished $2.00+ from the line (under $1.00: 17/21; $1.00\u20132.00: 14/14; $2.00\u20134.00: 31/31; $4.00+: 28/28). Disagreement near the line is expected: Coinbase is one exchange, the index averages several. 6 windows had no candles."
+  },
+  {
+   "name": "Runs test (is the sequence random?)",
+   "status": "INFO",
+   "detail": "17,170 runs vs 16,485 expected (z = +7.54, p = 0.000): more switches than chance: results tend to alternate. Check that it also holds out of sample."
+  },
+  {
+   "name": "Does one result predict the next?",
+   "status": "INFO",
+   "detail": "lag-1 correlation -0.0416 (z = -7.55). Statistically non-zero, but check its size: a correlation this small moves the next window's odds by only about 2.1 percentage points, less than fees cost."
+  },
+  {
+   "name": "Hour-of-day lean holds out of sample?",
+   "status": "INFO",
+   "detail": "Split at 2026-06-07. Hours that looked significant in the first half: 04:00, 18:00; still significant, same direction, in the second half: none. Correlation of hourly leans between halves: +0.25 (near zero: the hourly pattern is noise)."
+  },
+  {
+   "name": "Streak behaviour holds out of sample?",
+   "status": "INFO",
+   "detail": "after 3 Ups the next was Up 43.7% (first half, n=1,713) vs 46.8% (second half, n=1,878); after 3 Downs the next was Up 56.6% (first half, n=1,801) vs 54.9% (second half, n=1,851). For a fade-or-follow rule to pay, the same lean must show in both halves and be larger than the ~2\u20133\u00a2 per contract that spread and fees cost."
+  },
+  {
+   "name": "Kalshi price edge holds out of sample?",
+   "status": "INFO",
+   "detail": "No price level was clearly profitable after fees. 4 more showed a paper profit that sits inside its error band, so it could just be luck: buy No at 40\u201350\u00a2: +2.4\u00a2 \u00b111.3 (n=75); buy Yes at 80\u201390\u00a2: +2.3\u00a2 \u00b15.7 (n=114); buy No at 20\u201330\u00a2: +1.8\u00a2 \u00b18.0 (n=102). Most windows trade under 10\u00a2 or over 90\u00a2; there, recent results ran -0.7\u00a2 to +0.2\u00a2 per contract."
+  },
+  {
+   "name": "Chance findings to expect",
+   "status": "INFO",
+   "detail": "The report tests 35 hour, weekday and slot groups; at 95% confidence about 1.8 would look significant by luck alone. Found: 3. That's no more than luck would produce."
+  }
+ ],
+ "spot_check": [
+  {
+   "ticker": "KXETH15M-26JAN100430-30",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26jan100430",
+   "strike": 3085.5,
+   "settle_value": null,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26JAN171445-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26jan171445",
+   "strike": 3315.42,
+   "settle_value": 3316.88,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26JAN240600-00",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26jan240600",
+   "strike": 2955.84,
+   "settle_value": 2956.99,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26JAN250000-00",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26jan250000",
+   "strike": 2943.02,
+   "settle_value": 2940.94,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26FEB010815-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26feb010815",
+   "strike": 2393.76,
+   "settle_value": 2404.25,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26FEB030230-30",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26feb030230",
+   "strike": 2323.27,
+   "settle_value": 2319.89,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26FEB120745-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26feb120745",
+   "strike": 1983.96,
+   "settle_value": 1983.29,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26FEB151345-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26feb151345",
+   "strike": 1972.86,
+   "settle_value": 1965.46,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26FEB172145-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26feb172145",
+   "strike": 1983.91,
+   "settle_value": 1990.42,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26MAR101100-00",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26mar101100",
+   "strike": 2045.82,
+   "settle_value": 2075.19,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26MAR290715-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26mar290715",
+   "strike": 1994.55,
+   "settle_value": 2001.29,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26MAY121515-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26may121515",
+   "strike": 2279.0,
+   "settle_value": 2284.24,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXETH15M-26MAY181415-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26may181415",
+   "strike": 2106.86,
+   "settle_value": 2099.61,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26MAY301745-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26may301745",
+   "strike": 2027.92,
+   "settle_value": 2027.78,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26JUL270830-30",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26jul270830",
+   "strike": 1955.06,
+   "settle_value": 1947.61,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26AUG250715-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26aug250715",
+   "strike": 2481.87,
+   "settle_value": 2475.63,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26SEP141045-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26sep141045",
+   "strike": 2504.15,
+   "settle_value": 2497.15,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26SEP301315-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26sep301315",
+   "strike": 2693.82,
+   "settle_value": 2691.94,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26OCT042315-15",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26oct042315",
+   "strike": 2730.4,
+   "settle_value": 2728.55,
+   "result": "no"
+  },
+  {
+   "ticker": "KXETH15M-26OCT110645-45",
+   "url": "https://kalshi.com/markets/kxeth15m/eth-15m-price-up-down/kxeth15m-26oct110645",
+   "strike": 2498.55,
+   "settle_value": 2496.92,
+   "result": "no"
+  }
+ ],
+ "coinbase_buckets": {
+  "under $1.00": [
+   21,
+   17
+  ],
+  "$1.00\u20132.00": [
+   14,
+   14
+  ],
+  "$2.00\u20134.00": [
+   31,
+   31
+  ],
+  "$4.00+": [
+   28,
+   28
+  ]
+ }
+}

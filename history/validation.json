@@ -1,0 +1,231 @@
+{
+ "generated_utc": "2026-11-28T10:13:18+00:00",
+ "windows": 32982,
+ "counts": {
+  "PASS": 3,
+  "WARN": 3,
+  "INFO": 6
+ },
+ "checks": [
+  {
+   "name": "No duplicate windows",
+   "status": "PASS",
+   "detail": "32,982 windows, 0 duplicate tickers, 0 duplicate close times"
+  },
+  {
+   "name": "Complete 15-minute schedule",
+   "status": "WARN",
+   "detail": "859 windows missing in 54 gaps (largest: 68 after 2025-12-13 05:00 UTC; 67 after 2025-12-30 08:30 UTC; 50 after 2025-12-29 08:30 UTC). Usually exchange downtime or markets Kalshi voided; rerun history.py to fill recent ones."
+  },
+  {
+   "name": "Result matches settlement \u2265 price to beat",
+   "status": "PASS",
+   "detail": "all 30,104 checkable windows agree; 2878 windows lack a price to beat or settlement"
+  },
+  {
+   "name": "Chain: price to beat = previous settlement",
+   "status": "WARN",
+   "detail": "30,061 of 30,063 back-to-back pairs match exactly (99.99%); largest breaks: KXBTC15M-26MAY190530-30 (+$3), KXBTC15M-26APR241415-15 (+$0)"
+  },
+  {
+   "name": "Prices are sane",
+   "status": "WARN",
+   "detail": "price to beat ranges $55,588\u2013$97,730; 4 windows moved more than 3% in 15 minutes; 2878 missing or zero values"
+  },
+  {
+   "name": "Independent price source (Coinbase)",
+   "status": "PASS",
+   "detail": "Coinbase agreed on direction in 96.8% of 94 sampled windows and 100.0% of those that finished $50+ from the line (under $25: 17/20; $25\u201350: 16/16; $50\u2013100: 24/24; $100+: 34/34). Disagreement near the line is expected: Coinbase is one exchange, the index averages several. 6 windows had no candles."
+  },
+  {
+   "name": "Runs test (is the sequence random?)",
+   "status": "INFO",
+   "detail": "17,048 runs vs 16,491 expected (z = +6.13, p = 0.000): more switches than chance: results tend to alternate. Check that it also holds out of sample."
+  },
+  {
+   "name": "Does one result predict the next?",
+   "status": "INFO",
+   "detail": "lag-1 correlation -0.0338 (z = -6.14). Statistically non-zero, but check its size: a correlation this small moves the next window's odds by only about 1.7 percentage points, less than fees cost."
+  },
+  {
+   "name": "Hour-of-day lean holds out of sample?",
+   "status": "INFO",
+   "detail": "Split at 2026-06-07. Hours that looked significant in the first half: 04:00; still significant, same direction, in the second half: none. Correlation of hourly leans between halves: +0.22 (near zero: the hourly pattern is noise)."
+  },
+  {
+   "name": "Streak behaviour holds out of sample?",
+   "status": "INFO",
+   "detail": "after 3 Ups the next was Up 44.9% (first half, n=1,796) vs 47.4% (second half, n=1,841); after 3 Downs the next was Up 55.8% (first half, n=1,797) vs 52.6% (second half, n=1,982). For a fade-or-follow rule to pay, the same lean must show in both halves and be larger than the ~2\u20133\u00a2 per contract that spread and fees cost."
+  },
+  {
+   "name": "Kalshi price edge holds out of sample?",
+   "status": "INFO",
+   "detail": "No price level was clearly profitable after fees. 7 more showed a paper profit that sits inside its error band, so it could just be luck: buy No at 70\u201380\u00a2: +4.5\u00a2 \u00b19.3 (n=99); buy No at 80\u201390\u00a2: +3.9\u00a2 \u00b16.9 (n=132); buy No at 50\u201360\u00a2: +2.6\u00a2 \u00b111.0 (n=86). Most windows trade under 10\u00a2 or over 90\u00a2; there, recent results ran -0.4\u00a2 to +0.0\u00a2 per contract."
+  },
+  {
+   "name": "Chance findings to expect",
+   "status": "INFO",
+   "detail": "The report tests 35 hour, weekday and slot groups; at 95% confidence about 1.8 would look significant by luck alone. Found: 2. That's no more than luck would produce."
+  }
+ ],
+ "spot_check": [
+  {
+   "ticker": "KXBTC15M-26JAN100145-45",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26jan100145",
+   "strike": 90409.83,
+   "settle_value": null,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26JAN171130-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26jan171130",
+   "strike": 95468.17,
+   "settle_value": 95406.58,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26JAN240245-45",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26jan240245",
+   "strike": 89472.22,
+   "settle_value": 89496.5,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26JAN242045-45",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26jan242045",
+   "strike": 89078.41,
+   "settle_value": 89003.2,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26FEB010500-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26feb010500",
+   "strike": 78815.3,
+   "settle_value": 78978.54,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26FEB022315-15",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26feb022315",
+   "strike": 78699.1,
+   "settle_value": 78663.07,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26FEB120430-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26feb120430",
+   "strike": 67130.25,
+   "settle_value": 67254.57,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26FEB151030-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26feb151030",
+   "strike": 69177.36,
+   "settle_value": 68876.07,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26FEB171830-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26feb171830",
+   "strike": 67405.82,
+   "settle_value": 67420.97,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26MAR100745-45",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26mar100745",
+   "strike": 70653.35,
+   "settle_value": 70590.03,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26MAR290400-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26mar290400",
+   "strike": 66585.27,
+   "settle_value": 66619.35,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26MAY121200-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26may121200",
+   "strike": 80344.74,
+   "settle_value": 80332.07,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26MAY181100-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26may181100",
+   "strike": 76475.92,
+   "settle_value": 76328.21,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26MAY301430-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26may301430",
+   "strike": 73917.42,
+   "settle_value": 73865.91,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26JUL270515-15",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26jul270515",
+   "strike": 65117.21,
+   "settle_value": 65074.57,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26AUG250400-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26aug250400",
+   "strike": 80478.21,
+   "settle_value": 79727.68,
+   "result": "no"
+  },
+  {
+   "ticker": "KXBTC15M-26SEP140730-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26sep140730",
+   "strike": 77740.51,
+   "settle_value": 77877.61,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26SEP301000-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26sep301000",
+   "strike": 84435.58,
+   "settle_value": 84541.46,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26OCT042000-00",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26oct042000",
+   "strike": 86485.78,
+   "settle_value": 86505.93,
+   "result": "yes"
+  },
+  {
+   "ticker": "KXBTC15M-26OCT110330-30",
+   "url": "https://kalshi.com/markets/kxbtc15m/bitcoin-price-up-down/kxbtc15m-26oct110330",
+   "strike": 83061.18,
+   "settle_value": 82994.43,
+   "result": "no"
+  }
+ ],
+ "coinbase_buckets": {
+  "under $25": [
+   20,
+   17
+  ],
+  "$25\u201350": [
+   16,
+   16
+  ],
+  "$50\u2013100": [
+   24,
+   24
+  ],
+  "$100+": [
+   34,
+   34
+  ]
+ }
+}
